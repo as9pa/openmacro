@@ -1,0 +1,459 @@
+<title>Wooting 60HE Macro App — Project Plan</title>
+<style>
+  :root{
+    --ground:#13151b;
+    --surface:#1b1e27;
+    --surface-2:#20242f;
+    --ink:#e8eaf0;
+    --ink-dim:#9aa2b2;
+    --ink-faint:#69707f;
+    --line:#2b303c;
+    --line-soft:#242935;
+    --accent:#f2a83b;        /* the one bold color — warm, keycap/mechanical */
+    --accent-soft:#3a2e19;
+    --ok:#66c48d;
+    --ok-soft:#1c2a22;
+    --caution:#e28166;
+    --caution-soft:#2d1f1b;
+    --signal:#59c4d4;        /* cool, used only for the analog/Phase-2 nod */
+    --signal-soft:#182a2d;
+    --mono:"SF Mono","JetBrains Mono",ui-monospace,"Menlo","Consolas",monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",system-ui,"Helvetica Neue",Arial,sans-serif;
+  }
+
+  *{box-sizing:border-box;}
+
+  body{
+    background:
+      radial-gradient(120% 60% at 50% -10%, #191c25 0%, var(--ground) 55%) fixed,
+      var(--ground);
+    color:var(--ink);
+    font-family:var(--sans);
+    line-height:1.62;
+    font-size:16.5px;
+    -webkit-font-smoothing:antialiased;
+    margin:0;
+  }
+
+  .doc{
+    max-width:900px;
+    margin:0 auto;
+    padding:clamp(1.4rem,4vw,3.2rem) clamp(1.1rem,4vw,2.4rem) 5rem;
+    display:flex;
+    flex-direction:column;
+    gap:clamp(2.6rem,5vw,3.8rem);
+  }
+
+  @media (prefers-reduced-motion: no-preference){
+    .doc > section, .masthead{
+      animation:rise .5s cubic-bezier(.2,.7,.3,1) both;
+    }
+    .doc > section:nth-child(2){animation-delay:.04s;}
+    .doc > section:nth-child(3){animation-delay:.08s;}
+    .doc > section:nth-child(4){animation-delay:.12s;}
+    @keyframes rise{from{opacity:0;transform:translateY(10px);}to{opacity:1;transform:none;}}
+  }
+
+  /* ---------- masthead ---------- */
+  .masthead{display:flex;flex-direction:column;gap:1.15rem;}
+  .toprow{display:flex;align-items:center;gap:.7rem;flex-wrap:wrap;}
+  .wordmark{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.14em;
+    color:var(--accent);border:1px solid var(--accent-soft);
+    background:linear-gradient(var(--accent-soft),transparent);
+    padding:.34rem .55rem;border-radius:6px;font-weight:600;
+  }
+  .eyebrow{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--ink-faint);
+  }
+  .eyebrow b{color:var(--ok);font-weight:600;}
+  h1{
+    font-size:clamp(1.9rem,4.5vw,2.9rem);
+    line-height:1.08;letter-spacing:-.02em;font-weight:680;
+    margin:0;text-wrap:balance;
+  }
+  h1 .amp{color:var(--accent);}
+  .lede{
+    color:var(--ink-dim);font-size:1.08rem;max-width:60ch;margin:0;
+    text-wrap:pretty;
+  }
+  .meta{display:flex;flex-wrap:wrap;gap:.5rem;margin-top:.3rem;}
+  .chip{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.02em;
+    color:var(--ink-dim);background:var(--surface);
+    border:1px solid var(--line);border-radius:999px;
+    padding:.32rem .7rem;white-space:nowrap;
+  }
+  .chip b{color:var(--ink);font-weight:600;}
+
+  /* ---------- section scaffolding ---------- */
+  section{display:flex;flex-direction:column;gap:1.15rem;}
+  .kicker{
+    font-family:var(--mono);font-size:.72rem;letter-spacing:.2em;
+    text-transform:uppercase;color:var(--accent);
+  }
+  h2{
+    font-size:clamp(1.25rem,2.6vw,1.6rem);font-weight:640;letter-spacing:-.01em;
+    margin:0;text-wrap:balance;
+  }
+  h2 + .sub{color:var(--ink-dim);margin:-.5rem 0 0;max-width:64ch;}
+  p{margin:0;max-width:66ch;}
+  p.note{color:var(--ink-dim);font-size:.95rem;}
+  a{color:var(--accent);text-decoration:none;border-bottom:1px solid var(--accent-soft);}
+  a:hover{border-bottom-color:var(--accent);}
+  a:focus-visible{outline:2px solid var(--accent);outline-offset:3px;border-radius:2px;}
+  strong{color:var(--ink);font-weight:640;}
+
+  /* ---------- locked decisions ---------- */
+  .locked-grid{
+    display:grid;grid-template-columns:repeat(auto-fit,minmax(230px,1fr));gap:.85rem;
+  }
+  .card{
+    background:var(--surface);border:1px solid var(--line);
+    border-radius:10px;padding:1.05rem 1.1rem;display:flex;flex-direction:column;gap:.5rem;
+  }
+  .tag{
+    align-self:flex-start;font-family:var(--mono);font-size:.64rem;letter-spacing:.12em;
+    text-transform:uppercase;font-weight:600;padding:.22rem .5rem;border-radius:5px;
+  }
+  .tag.locked{color:var(--ok);background:var(--ok-soft);}
+  .tag.later{color:var(--signal);background:var(--signal-soft);}
+  .card h3{font-size:1rem;font-weight:620;margin:0;letter-spacing:-.005em;}
+  .card p{font-size:.9rem;color:var(--ink-dim);margin:0;}
+
+  /* ---------- three systems ---------- */
+  .systems{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:.85rem;}
+  .sys{
+    background:var(--surface-2);border:1px solid var(--line-soft);border-radius:10px;
+    padding:1.1rem;display:flex;flex-direction:column;gap:.55rem;
+  }
+  .sys .lbl{font-family:var(--mono);font-size:.7rem;letter-spacing:.14em;text-transform:uppercase;color:var(--ink-faint);}
+  .sys h3{margin:0;font-size:1.02rem;font-weight:620;}
+  .sys p{font-size:.9rem;color:var(--ink-dim);margin:0;}
+  .sys .why{
+    font-size:.82rem;color:var(--accent);border-top:1px dashed var(--line);
+    padding-top:.55rem;margin-top:.15rem;
+  }
+
+  /* ---------- code ---------- */
+  .code-wrap{overflow-x:auto;border-radius:10px;border:1px solid var(--line);background:var(--surface);}
+  pre{
+    margin:0;padding:1.1rem 1.25rem;font-family:var(--mono);
+    font-size:.82rem;line-height:1.7;color:#d3d8e2;min-width:max-content;
+  }
+  .cm{color:var(--ink-faint);}      /* comment */
+  .st{color:var(--ok);}             /* string */
+  .kw{color:var(--accent);}         /* keyword / type */
+  .fn{color:var(--signal);}         /* member */
+
+  /* ---------- table ---------- */
+  .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:10px;}
+  table{border-collapse:collapse;width:100%;min-width:560px;font-size:.9rem;}
+  th,td{text-align:left;padding:.7rem .9rem;border-bottom:1px solid var(--line-soft);vertical-align:top;}
+  thead th{
+    font-family:var(--mono);font-size:.68rem;letter-spacing:.12em;text-transform:uppercase;
+    color:var(--ink-faint);font-weight:600;background:var(--surface-2);
+  }
+  tbody tr:last-child td{border-bottom:none;}
+  td:first-child{color:var(--ink);font-weight:560;white-space:nowrap;}
+  td code{font-family:var(--mono);font-size:.82em;color:var(--accent);background:var(--accent-soft);padding:.1rem .35rem;border-radius:4px;}
+  td .p2{font-family:var(--mono);font-size:.82em;color:var(--signal);background:var(--signal-soft);padding:.1rem .35rem;border-radius:4px;}
+
+  /* ---------- roadmap ---------- */
+  .road{display:flex;flex-direction:column;gap:0;}
+  .phase{
+    display:grid;grid-template-columns:auto 1fr;gap:1rem;
+    padding:1rem 0;border-top:1px solid var(--line-soft);position:relative;
+  }
+  .phase:first-child{border-top:none;}
+  .phase .num{
+    font-family:var(--mono);font-weight:600;font-size:.85rem;
+    width:2rem;height:2rem;display:grid;place-items:center;border-radius:8px;
+    color:var(--accent);background:var(--accent-soft);align-self:start;
+  }
+  .phase.p2 .num{color:var(--signal);background:var(--signal-soft);}
+  .phase .body{display:flex;flex-direction:column;gap:.3rem;}
+  .phase h3{margin:0;font-size:1.02rem;font-weight:600;display:flex;gap:.6rem;align-items:baseline;flex-wrap:wrap;}
+  .phase h3 .flag{font-family:var(--mono);font-size:.62rem;letter-spacing:.1em;text-transform:uppercase;color:var(--ink-faint);border:1px solid var(--line);padding:.12rem .4rem;border-radius:4px;}
+  .phase p{font-size:.9rem;color:var(--ink-dim);}
+  .phase .learn{font-size:.8rem;color:var(--ink-faint);font-family:var(--mono);}
+  .phase .learn b{color:var(--accent);font-weight:500;}
+
+  /* ---------- gotchas ---------- */
+  .gotchas{display:flex;flex-direction:column;gap:.7rem;}
+  .got{
+    display:grid;grid-template-columns:auto 1fr;gap:.85rem;align-items:start;
+    background:var(--surface);border:1px solid var(--line);border-left:3px solid var(--caution);
+    border-radius:8px;padding:.85rem 1rem;
+  }
+  .got .mk{font-family:var(--mono);color:var(--caution);font-weight:700;font-size:.95rem;line-height:1.5;}
+  .got div p:first-child{color:var(--ink);font-weight:560;font-size:.94rem;}
+  .got p{font-size:.88rem;color:var(--ink-dim);}
+
+  /* ---------- resources ---------- */
+  .links{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:.5rem;}
+  .lnk{
+    display:flex;flex-direction:column;gap:.15rem;padding:.75rem .9rem;
+    background:var(--surface);border:1px solid var(--line);border-radius:8px;
+    border-bottom:1px solid var(--line);
+  }
+  .lnk:hover{border-color:var(--accent-soft);}
+  .lnk .t{font-weight:580;font-size:.92rem;}
+  .lnk .u{font-family:var(--mono);font-size:.72rem;color:var(--ink-faint);word-break:break-all;}
+
+  .footnote{color:var(--ink-faint);font-size:.82rem;border-top:1px solid var(--line-soft);padding-top:1.4rem;}
+  hr.rule{border:none;height:1px;background:var(--line-soft);margin:0;}
+</style>
+
+<div class="doc">
+
+  <header class="masthead">
+    <div class="toprow">
+      <span class="wordmark">WOOTING · 60HE</span>
+      <span class="eyebrow">Project plan · <b>research complete</b></span>
+    </div>
+    <h1>A native macro app for the Wooting 60HE</h1>
+    <p class="lede">SteelSeries-quality macros — record, edit, replay — as an open-source Windows app you own. Everything we settled, in one page to carry back to your PC.</p>
+    <div class="meta">
+      <span class="chip"><b>Platform</b> · Windows 10/11</span>
+      <span class="chip"><b>Stack</b> · C# / .NET + WPF</span>
+      <span class="chip"><b>Input</b> · host-side (software)</span>
+      <span class="chip"><b>License</b> · open source</span>
+    </div>
+  </header>
+
+  <section>
+    <span class="kicker">Decisions locked</span>
+    <h2>What we settled</h2>
+    <div class="locked-grid">
+      <div class="card">
+        <span class="tag locked">Locked</span>
+        <h3>Native desktop app</h3>
+        <p>Not a browser tool, not onboard. A tray app that's always running so you can flip macros on and off on demand.</p>
+      </div>
+      <div class="card">
+        <span class="tag locked">Locked</span>
+        <h3>C# / .NET + WPF</h3>
+        <p>Windows-native. Key hooks, input sending, and the Wooting SDK are all short, well-documented calls — and WPF gives a real, polished GUI.</p>
+      </div>
+      <div class="card">
+        <span class="tag locked">Locked</span>
+        <h3>Host-side injection</h3>
+        <p>The exact method SteelSeries and DS4Windows use under the hood. You confirmed this is fine — it always was software.</p>
+      </div>
+      <div class="card">
+        <span class="tag locked">Locked</span>
+        <h3>Not stored on the keyboard</h3>
+        <p>The 60HE firmware has no macro engine, so macros live in the app regardless. That was never the real choice.</p>
+      </div>
+      <div class="card">
+        <span class="tag locked">Feature set</span>
+        <h3>Record · edit · replay</h3>
+        <p>Recorder with an editable timeline, add/edit delays, and playback modes: <strong>Once</strong>, <strong>While&nbsp;held</strong>, <strong>Toggle</strong>.</p>
+      </div>
+      <div class="card">
+        <span class="tag later">Phase 2</span>
+        <h3>Analog depth triggers</h3>
+        <p>Optional bonus: fire macros by <em>how far</em> a key is pressed. The one thing SteelSeries can't do — architected in, built last.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="kicker">Mental model</span>
+    <h2>It's three systems in a trench coat</h2>
+    <p class="sub">Every macro tool — yours, SteelSeries, DS4Windows, AutoHotkey — is really just these three parts. Build them in order and it's never as big as it looks.</p>
+    <div class="systems">
+      <div class="sys">
+        <span class="lbl">01 · Capture</span>
+        <h3>Watch every key</h3>
+        <p>A background hook sees each key event system-wide and decides whether it's a macro trigger.</p>
+        <p class="why">Why it matters: to bind a macro to a key <em>and</em> stop it typing normally, the hook must <em>swallow</em> the original press.</p>
+      </div>
+      <div class="sys">
+        <span class="lbl">02 · Execute</span>
+        <h3>Replay the sequence</h3>
+        <p>Fire the recorded events with correct timing — keystrokes, text, mouse, delays, launch apps.</p>
+        <p class="why">This is the "software injection" part. It's the same path all three reference tools use.</p>
+      </div>
+      <div class="sys">
+        <span class="lbl">03 · Interface</span>
+        <h3>See &amp; edit macros</h3>
+        <p>A visual keyboard to assign binds and a timeline to record and edit — plus JSON storage and a tray toggle.</p>
+        <p class="why">The biggest chunk of work, and the difference between "polished" and "Wootomation".</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="kicker">Architecture</span>
+    <h2>The data model on one screen</h2>
+    <p class="sub">Get these shapes right and everything else is UI. This is the backbone you'll build the app around.</p>
+    <div class="code-wrap"><pre><span class="kw">Macro</span>       = ordered list of MacroEvent
+
+<span class="kw">MacroEvent</span>  ─┬─ KeyDown(key)        <span class="cm">// press</span>
+             ├─ KeyUp(key)          <span class="cm">// release</span>
+             ├─ Delay(ms)           <span class="cm">// editable wait</span>
+             ├─ Text(<span class="st">"gg ez"</span>)        <span class="cm">// type a string</span>
+             ├─ LaunchApp(path)
+             └─ MouseClick(button)
+
+<span class="kw">Binding</span>     = Trigger + Macro + PlaybackMode
+              Trigger      = a key   <span class="cm">// Phase 2: key + depth threshold</span>
+              PlaybackMode = Once | WhileHeld | Toggle
+
+<span class="kw">Profile</span>     = list of Bindings + optional <span class="st">"match this app"</span> rule
+<span class="kw">Config</span>      = list of Profiles      <span class="cm">// → saved to %AppData% as JSON</span></pre></div>
+  </section>
+
+  <section>
+    <span class="kicker">Toolbox</span>
+    <h2>What to reach for in C#</h2>
+    <p class="sub">Each system maps to one battle-tested package. You're assembling, not inventing.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>Job</th><th>Use</th><th>Note</th></tr></thead>
+        <tbody>
+          <tr><td>Capture keys</td><td><code>SharpHook</code></td><td>Global hook; can suppress a key on Windows. Also runs on macOS — so you can prototype the engine now.</td></tr>
+          <tr><td>Play input</td><td><code>H.InputSimulator</code></td><td>Sends keystrokes, text, mouse. (Win32 <code>SendInput</code> underneath.) SharpHook's simulator also works.</td></tr>
+          <tr><td>Interface</td><td><code>WPF + XAML</code></td><td>Visual keyboard grid + macro timeline editor. Start with code-behind; learn MVVM later.</td></tr>
+          <tr><td>Save configs</td><td><code>System.Text.Json</code></td><td>Built in. Serialize the Config tree to JSON in <code>%AppData%</code>.</td></tr>
+          <tr><td>Tray / background</td><td><code>Hardcodet.NotifyIcon.Wpf</code></td><td>Lives in the system tray; the master on/off toggle.</td></tr>
+          <tr><td>Analog <span class="p2">Phase 2</span></td><td>Wooting Analog SDK</td><td>P/Invoke into the SDK's C API to read key depth 0.0–1.0; run a threshold state machine.</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section>
+    <span class="kicker">Roadmap</span>
+    <h2>Build it in slices, not all at once</h2>
+    <p class="sub">Each phase is usable on its own. You'll have something you'd genuinely run by phase 3 — long before the GUI exists.</p>
+    <div class="road">
+      <div class="phase">
+        <div class="num">1</div>
+        <div class="body">
+          <h3>MVP engine <span class="flag">an evening</span></h3>
+          <p>One key → one fixed keystroke sequence, firing reliably. Proves capture + injection work end to end.</p>
+          <p class="learn">Learn: <b>global hooks</b> · <b>input synthesis</b> · <b>events &amp; delegates</b></p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="num">2</div>
+        <div class="body">
+          <h3>Playback modes</h3>
+          <p>Once · repeat while held · toggle on/off. This is most of what makes a macro tool feel "real".</p>
+          <p class="learn">Learn: <b>state machines</b> · <b>timers</b> · <b>async / threads</b></p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="num">3</div>
+        <div class="body">
+          <h3>Recorder</h3>
+          <p>Capture live events <em>with timing</em>, save to JSON, and let yourself edit the sequence afterward.</p>
+          <p class="learn">Learn: <b>serialization</b> · <b>data modeling</b></p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="num">4</div>
+        <div class="body">
+          <h3>The GUI <span class="flag">the long pole</span></h3>
+          <p>WPF visual keyboard to assign binds + an editable timeline. Where it starts to feel like SteelSeries.</p>
+          <p class="learn">Learn: <b>XAML</b> · <b>data binding</b> · <b>MVVM</b></p>
+        </div>
+      </div>
+      <div class="phase">
+        <div class="num">5</div>
+        <div class="body">
+          <h3>Per-app profiles</h3>
+          <p>Detect the foreground app and swap the active macro set automatically.</p>
+          <p class="learn">Learn: <b>Win32 window queries</b> · <b>process detection</b></p>
+        </div>
+      </div>
+      <div class="phase p2">
+        <div class="num">6</div>
+        <div class="body">
+          <h3>Analog triggers <span class="flag">phase 2 · beats steelseries</span></h3>
+          <p>Half-press does one thing, full-press another — depth thresholds read from the Wooting Analog SDK.</p>
+          <p class="learn">Learn: <b>P/Invoke</b> · <b>polling loops</b> · <b>hysteresis</b></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="kicker">First step</span>
+    <h2>What phase 1 actually looks like</h2>
+    <p class="sub">A console app: press Caps Lock, get text typed. Runs on your Mac tonight (grant Accessibility), then the exact logic moves into WPF on your PC.</p>
+    <div class="code-wrap"><pre><span class="kw">using</span> SharpHook;
+<span class="kw">using</span> SharpHook.Native;
+
+<span class="kw">var</span> sim  = <span class="kw">new</span> EventSimulator();
+<span class="kw">var</span> hook = <span class="kw">new</span> SimpleGlobalHook();
+
+hook.<span class="fn">KeyPressed</span> += (s, e) =&gt;
+{
+    <span class="kw">if</span> (e.Data.KeyCode == KeyCode.VcCapsLock)
+    {
+        e.SuppressEvent = <span class="kw">true</span>;              <span class="cm">// swallow the real key (Windows)</span>
+        sim.<span class="fn">SimulateTextEntry</span>(<span class="st">"gg ez"</span>);      <span class="cm">// fire the macro</span>
+    }
+};
+
+hook.<span class="fn">Run</span>();   <span class="cm">// listen for global key events</span></pre></div>
+    <p class="note">Treat it as the shape, not gospel — check SharpHook's current API for exact names. Every line here carries straight into the real app.</p>
+  </section>
+
+  <section>
+    <span class="kicker">Before you build</span>
+    <h2>Four things worth knowing</h2>
+    <div class="gotchas">
+      <div class="got">
+        <span class="mk">!</span>
+        <div>
+          <p>The keyboard can't do this itself.</p>
+          <p>The 60HE offers DKS, Mod Tap, Toggle Key, remaps and 4 onboard profiles — but those are fixed depth-rules, not recorded, timed, repeatable macros. Those must live in your app.</p>
+        </div>
+      </div>
+      <div class="got">
+        <span class="mk">!</span>
+        <div>
+          <p>SteelSeries &amp; DS4Windows are software too.</p>
+          <p>Same injection path as AutoHotkey. The thing you liked about them over AHK is the GUI — which is exactly what you're building.</p>
+        </div>
+      </div>
+      <div class="got">
+        <span class="mk">!</span>
+        <div>
+          <p>Anti-cheat can flag injected input.</p>
+          <p>Global hooks + synthesized input trip some game anti-cheats. Check the ToS of any game you'd use it alongside.</p>
+        </div>
+      </div>
+      <div class="got">
+        <span class="mk">!</span>
+        <div>
+          <p>Prototype on Mac, ship on Windows.</p>
+          <p>The engine (SharpHook) runs on your Mac for testing now. WPF is Windows-only, so the GUI and final build happen at your PC.</p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="kicker">Resources</span>
+    <h2>Where to look</h2>
+    <div class="links">
+      <a class="lnk" href="https://github.com/WootingKb/wooting-analog-sdk"><span class="t">Wooting Analog SDK</span><span class="u">github.com/WootingKb/wooting-analog-sdk</span></a>
+      <a class="lnk" href="https://github.com/TolikPylypchuk/SharpHook"><span class="t">SharpHook — hooks + simulation</span><span class="u">github.com/TolikPylypchuk/SharpHook</span></a>
+      <a class="lnk" href="https://github.com/HavenDV/H.InputSimulator"><span class="t">H.InputSimulator</span><span class="u">github.com/HavenDV/H.InputSimulator</span></a>
+      <a class="lnk" href="https://learn.microsoft.com/dotnet/desktop/wpf/"><span class="t">WPF documentation</span><span class="u">learn.microsoft.com/dotnet/desktop/wpf</span></a>
+      <a class="lnk" href="https://github.com/WootingKb/wooting-macros"><span class="t">Wootomation — the bar to clear</span><span class="u">github.com/WootingKb/wooting-macros</span></a>
+      <a class="lnk" href="https://help.wooting.io/article/99-how-to-use-dks"><span class="t">Dynamic Keystroke, explained</span><span class="u">help.wooting.io/article/99-how-to-use-dks</span></a>
+    </div>
+  </section>
+
+  <hr class="rule" />
+  <p class="footnote">Research phase complete. Next move when you're at your PC: scaffold phase 1 as a runnable .NET console project, then grow it slice by slice into the WPF app.</p>
+
+</div>
