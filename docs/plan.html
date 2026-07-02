@@ -119,6 +119,10 @@
   }
   .tag.locked{color:var(--ok);background:var(--ok-soft);}
   .tag.later{color:var(--signal);background:var(--signal-soft);}
+  .tag.safety{color:var(--accent);background:var(--accent-soft);}
+  code{font-family:var(--mono);font-size:.85em;color:var(--accent);}
+  .callout{background:var(--surface-2);border:1px solid var(--line);border-left:3px solid var(--accent);border-radius:8px;padding:.9rem 1.05rem;color:var(--ink-dim);font-size:.9rem;line-height:1.6;}
+  .callout b{color:var(--ink);font-weight:600;}
   .card h3{font-size:1rem;font-weight:620;margin:0;letter-spacing:-.005em;}
   .card p{font-size:.9rem;color:var(--ink-dim);margin:0;}
 
@@ -230,7 +234,7 @@
       <div class="card">
         <span class="tag locked">Locked</span>
         <h3>Native desktop app</h3>
-        <p>Not a browser tool, not onboard. A tray app that's always running so you can flip macros on and off on demand.</p>
+        <p>Not a browser tool, not onboard. Open it when you want macros; while open it minimizes to the tray to arm/disarm, and closing it leaves nothing running.</p>
       </div>
       <div class="card">
         <span class="tag locked">Locked</span>
@@ -254,8 +258,23 @@
       </div>
       <div class="card">
         <span class="tag later">Phase 2</span>
-        <h3>Analog depth triggers</h3>
-        <p>Optional bonus: fire macros by <em>how far</em> a key is pressed. The one thing SteelSeries can't do — architected in, built last.</p>
+        <h3>Analog depth features</h3>
+        <p>Optional module: different actions at different press depths, threshold triggers, or depth mapped to a continuous output. The thing no normal keyboard can do — built last.</p>
+      </div>
+      <div class="card">
+        <span class="tag locked">Locked</span>
+        <h3>One codebase → two releases</h3>
+        <p>Two installers — Core (any keyboard) and Wooting-integrated — from the same source, not a fork. Analog activates only with a Wooting present, so other keyboards pay ~zero.</p>
+      </div>
+      <div class="card">
+        <span class="tag locked">Locked</span>
+        <h3>Graceful stop</h3>
+        <p>On stop, finish the current cycle cleanly (with an immediate-stop option). Either way, never leave a key held down.</p>
+      </div>
+      <div class="card">
+        <span class="tag locked">Locked</span>
+        <h3>Clean, minimal UI</h3>
+        <p>Modern but restrained — uncluttered, never overloaded (Blur-AutoClicker is too dense). No gradients, glass, neon cards, or emoji; advanced options tucked away until needed.</p>
       </div>
     </div>
   </section>
@@ -267,8 +286,8 @@
     <div class="systems">
       <div class="sys">
         <span class="lbl">01 · Capture</span>
-        <h3>Watch every key</h3>
-        <p>A background hook sees each key event system-wide and decides whether it's a macro trigger.</p>
+        <h3>Watch armed keys only</h3>
+        <p>While a macro is enabled, the app watches for its trigger key(s) and ignores everything else — see Safety &amp; trust below.</p>
         <p class="why">Why it matters: to bind a macro to a key <em>and</em> stop it typing normally, the hook must <em>swallow</em> the original press.</p>
       </div>
       <div class="sys">
@@ -284,6 +303,35 @@
         <p class="why">The biggest chunk of work, and the difference between "polished" and "Wootomation".</p>
       </div>
     </div>
+  </section>
+
+  <section>
+    <span class="kicker">Safety &amp; trust</span>
+    <h2>Designed to be obviously not a keylogger</h2>
+    <p class="sub">A macro tool has to watch the keyboard — the same thing a keylogger does. So the design earns trust on purpose, and stays auditable.</p>
+    <div class="locked-grid">
+      <div class="card">
+        <span class="tag safety">Gated</span>
+        <h3>No hook unless armed</h3>
+        <p>The global hook is installed only while at least one macro is enabled, and removed the instant you toggle everything off. Idle app = nothing watching.</p>
+      </div>
+      <div class="card">
+        <span class="tag safety">Allowlist</span>
+        <h3>Only armed keys, never stored</h3>
+        <p>While active, it checks each event against the small set of keys with an enabled binding and returns immediately for anything else. Keystrokes are never buffered, logged, or written to disk.</p>
+      </div>
+      <div class="card">
+        <span class="tag safety">Narrowest API</span>
+        <h3>Prefer RegisterHotKey</h3>
+        <p>For a macro that just fires on a key press, Win32 <code>RegisterHotKey</code> makes the OS notify you for that one key only. The low-level hook is the fallback for while-held, key-up, suppression, and analog.</p>
+      </div>
+      <div class="card">
+        <span class="tag safety">Auditable</span>
+        <h3>Open source</h3>
+        <p>All of the above is verifiable by anyone reading the code — the strongest trust signal there is.</p>
+      </div>
+    </div>
+    <div class="callout"><b>Technical note:</b> a Windows low-level keyboard hook (<code>WH_KEYBOARD_LL</code>) is invoked for <em>every</em> key by OS design — you can't ask Windows to call you for only one key. The trust guarantee comes from <b>what the callback does</b> (filter to armed keys, never record) and <b>when it's installed</b> (only while a macro is enabled), not from the hook selectively not seeing keys. <code>RegisterHotKey</code> is the one API that literally fires for just the registered key.</div>
   </section>
 
   <section>
@@ -324,6 +372,101 @@
         </tbody>
       </table>
     </div>
+  </section>
+
+  <section>
+    <span class="kicker">Timing &amp; precision</span>
+    <h2>Hitting 1&nbsp;ms without drift</h2>
+    <p class="sub">Macros need a 1&nbsp;ms floor and intervals that stay accurate over minutes. Windows fights you: default timer granularity is ~15.6&nbsp;ms, and naive <code>sleep(interval)</code> loops drift because every sleep overshoots a little and the errors pile up.</p>
+    <div class="callout"><b>The core trick (from <a href="https://github.com/Blur009/Blur-AutoClicker">Blur-AutoClicker</a>'s engine):</b> don't sleep for <em>interval</em> each cycle — schedule against a <b>fixed grid of absolute deadlines</b>. Advance <code>nextFire += interval</code> relative to the <em>previous target</em> (never to "now"), then wait only until that absolute instant. If one cycle runs long, the next automatically waits less to catch up — so the <em>average</em> interval stays exactly on target. That <em>is</em> the "measure how far off it was, correct the next one" mechanism; anchoring to absolute time does it for free.</div>
+    <div class="code-wrap"><pre><span class="kw">using</span> System.Diagnostics;
+
+<span class="kw">long</span> freq     = Stopwatch.Frequency;
+<span class="kw">long</span> interval = freq / 1000;            <span class="cm">// 1 ms, in Stopwatch ticks</span>
+<span class="kw">long</span> nextFire = Stopwatch.<span class="fn">GetTimestamp</span>();
+
+<span class="kw">while</span> (running)
+{
+    <span class="fn">FireMacroStep</span>();                    <span class="cm">// press / release / delay</span>
+
+    nextFire += interval;                <span class="cm">// anchor to the ideal grid — NOT to "now"</span>
+
+    <span class="kw">long</span> remaining = nextFire - Stopwatch.<span class="fn">GetTimestamp</span>();
+    <span class="kw">if</span> (remaining &gt; 0)
+        <span class="fn">SleepThenSpin</span>(remaining);       <span class="cm">// coarse sleep, then spin the last ~1 ms</span>
+    <span class="cm">// remaining &lt;= 0 → we're behind: fire now and catch up</span>
+}</pre></div>
+    <div class="systems">
+      <div class="sys">
+        <span class="lbl">Resolution</span>
+        <h3>timeBeginPeriod(1)</h3>
+        <p>Raise the system timer to 1&nbsp;ms while a macro runs; restore on stop (IDisposable guard). Only while firing — it's system-wide.</p>
+      </div>
+      <div class="sys">
+        <span class="lbl">Last millisecond</span>
+        <h3>Sleep, then spin</h3>
+        <p>Coarse-sleep the bulk, then busy-spin (<code>Thread.SpinWait</code>) the final ~1&nbsp;ms for tight accuracy. Costs CPU — gate behind a high-precision toggle.</p>
+      </div>
+      <div class="sys">
+        <span class="lbl">Guardrails</span>
+        <h3>Clamp &amp; interrupt</h3>
+        <p>Clamp every delay to <code>max(1, x)</code> ms; wait in small ticks checking the stop flag so toggling off stays responsive.</p>
+      </div>
+    </div>
+    <p class="note">This timing machinery is entirely OS/CPU-level — nothing to do with the Wooting, and identical on any keyboard. <code>System.Threading.PeriodicTimer</code> is a simpler, coarser alternative; the Stopwatch&nbsp;+&nbsp;spin loop is what reliably hits 1&nbsp;ms.</p>
+  </section>
+
+  <section>
+    <span class="kicker">Performance &amp; footprint</span>
+    <h2>Lightweight, and no stutter in games</h2>
+    <p class="sub">It'll run during games where jitter matters, so the whole design targets low CPU/RAM and zero random freezes.</p>
+    <div class="systems">
+      <div class="sys">
+        <span class="lbl">Idle</span>
+        <h3>≈ free, or closed</h3>
+        <p>A normal app, not a service — open it for macros, close it and nothing lingers. While open, the hook is gated off until a macro is armed.</p>
+      </div>
+      <div class="sys">
+        <span class="lbl">Hot loop</span>
+        <h3>No GC stutter</h3>
+        <p>The engine runs on its own high-priority thread, never the UI thread, and allocates nothing per cycle — GC pauses are the classic cause of random freezes.</p>
+      </div>
+      <div class="sys">
+        <span class="lbl">Hook</span>
+        <h3>Tiny callback</h3>
+        <p>A slow low-level hook adds system-wide input lag and can be dropped by Windows, so the callback just checks the armed keys and signals the engine.</p>
+      </div>
+    </div>
+    <p class="note">Built for rapid on-demand triggering: the engine thread stays alive and waiting and the hot path is pre-warmed (ReadyToRun), so firing a macro several times a second feels lag-free even on the first fire. The sub-ms spin-wait costs a core, so it's behind the high-precision toggle and runs only during an active macro. Honest note: any host-side tool adds a little latency vs. raw hardware — a tight engine keeps it minimal and, more importantly, consistent.</p>
+  </section>
+
+  <section>
+    <span class="kicker">Analog features · Phase 2</span>
+    <h2>The Wooting-only superpower</h2>
+    <p class="sub">Only possible on a Wooting (via the Analog SDK), all opt-in and off by default — an optional module, not a fork.</p>
+    <div class="locked-grid">
+      <div class="card">
+        <span class="tag later">Main idea</span>
+        <h3>Multi-point actuation</h3>
+        <p>One key fires different actions at different press depths — a light press does X, a full press does Y. Like onboard DKS, but host-side so it can fire full macros.</p>
+      </div>
+      <div class="card">
+        <span class="tag later">Trigger</span>
+        <h3>Depth threshold</h3>
+        <p>Fire a macro when a key crosses a chosen depth (e.g. 50%).</p>
+      </div>
+      <div class="card">
+        <span class="tag later">Continuous</span>
+        <h3>Depth → analog output</h3>
+        <p>Map how far a key is pressed to a smooth value: mouse speed, scroll, a gamepad axis, volume. The genuinely unique analog-to-analog case.</p>
+      </div>
+      <div class="card">
+        <span class="tag later">Gating</span>
+        <h3>Hold past a depth</h3>
+        <p>A while-held macro repeats only while the key is pressed beyond a set depth.</p>
+      </div>
+    </div>
+    <p class="note">Reading analog means polling the SDK on a loop, which costs some CPU — another reason it's a dormant, optional module unless you're using it.</p>
   </section>
 
   <section>
