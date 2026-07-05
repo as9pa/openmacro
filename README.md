@@ -2,7 +2,7 @@
 
 An open-source, SteelSeries-style **macro app for any keyboard** — record, edit, and replay macros — built as a native Windows app you own. Ships in two flavors: a **Core** build, and a **Wooting-integrated** build that adds analog features on a Wooting 60HE.
 
-> **Status:** Phase 1 (MVP engine) is built — a console app in `src/OpenMacro.Cli`. Next: hands-on testing, then roadmap item 2 (playback modes).
+> **Status:** Phase 1 (MVP engine) is built and hand-tested — a console app in `src/OpenMacro.Cli`. Next: roadmap item 2 (playback modes).
 
 ---
 
