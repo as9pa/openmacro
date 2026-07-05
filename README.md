@@ -2,7 +2,7 @@
 
 An open-source, SteelSeries-style **macro app for any keyboard** — record, edit, and replay macros — built as a native Windows app you own. Ships in two flavors: a **Core** build, and a **Wooting-integrated** build that adds analog features on a Wooting 60HE.
 
-> **Status:** research complete, ready to build. No code yet — Phase 1 is the next step.
+> **Status:** Phase 1 (MVP engine) is built and hand-tested — a console app in `src/OpenMacro.Cli`. Next: roadmap item 2 (playback modes).
 
 ---
 
@@ -70,7 +70,7 @@ Config      = list of Profiles      // → saved to %AppData% as JSON
 
 | Job | Use | Note |
 |---|---|---|
-| Capture keys | `SharpHook` | Global hook; can suppress a key on Windows. Suppression only works with the *synchronous* hook (`SimpleGlobalHook`) — `TaskPoolGlobalHook` runs handlers async, after Windows has already delivered the key. Also runs on macOS, so you can prototype the engine now. |
+| Capture keys | `SharpHook` | Global hook; can suppress a key on Windows. Suppression only works with the *synchronous* hook (`SimpleGlobalHook`) — `TaskPoolGlobalHook` runs handlers async, after Windows has already delivered the key. `RunAsync` puts the hook on a *foreground* thread by default, which keeps the process alive (hook and all) after `Main` returns — pass `runAsyncOnBackgroundThread: true`. Also runs on macOS, so you can prototype the engine now. |
 | Play input | `H.InputSimulator` | Sends keystrokes, text, mouse (Win32 `SendInput` underneath). SharpHook's simulator also works. |
 | Interface | `WPF + XAML` | Visual keyboard grid + macro timeline editor. Start with code-behind; learn MVVM later. |
 | Save configs | `System.Text.Json` | Built in. Serialize the Config tree to JSON in `%AppData%`. |
@@ -130,37 +130,27 @@ Restraint here also serves the lightweight goal: fewer, simpler controls render 
 
 ## Roadmap
 
-1. **MVP engine** — one key → one fixed keystroke sequence, firing reliably. *(global hooks, input synthesis, events)*
+1. **MVP engine** ✅ — one key → one fixed keystroke sequence, firing reliably. *(global hooks, input synthesis, events)*
 2. **Playback modes** — Once / repeat while held / toggle. *(state machines, timers, async)*
 3. **Recorder** — capture live events with timing → JSON, then edit them. *(serialization, data modeling)*
 4. **The GUI** *(the long pole)* — WPF visual keyboard + editable timeline. *(XAML, data binding, MVVM)*
 5. **Per-app profiles** — detect foreground app, swap macro set. *(Win32 window queries)*
 6. **Analog triggers** *(Phase 2 — beats SteelSeries)* — depth thresholds via the SDK. *(P/Invoke, polling, hysteresis)*
 
-## Phase 1 — what the first step looks like
+## Phase 1 — the MVP engine (built)
 
-A console app: press Caps Lock, get text typed. Runs on macOS too (grant Accessibility) for prototyping; the exact logic moves into WPF later.
+`src/OpenMacro.Cli` — a console app: press Caps Lock, get `gg ez` typed. Runs on macOS too (grant Accessibility).
 
-```csharp
-using SharpHook;
-using SharpHook.Native;
-
-var sim  = new EventSimulator();
-var hook = new SimpleGlobalHook();
-
-hook.KeyPressed += (s, e) =>
-{
-    if (e.Data.KeyCode == KeyCode.VcCapsLock)
-    {
-        e.SuppressEvent = true;              // swallow the real key (Windows)
-        sim.SimulateTextEntry("gg ez");      // fire the macro
-    }
-};
-
-hook.Run();   // listen for global key events
+```
+dotnet run --project src/OpenMacro.Cli
 ```
 
-*(Shape, not gospel — check SharpHook's current API for exact names. Note this toy version breaks two rules the real engine must keep: it does the work on the hook thread instead of signaling the engine thread, and it doesn't drop injected events — fine here only because the output text can't contain the Caps Lock trigger.)*
+Small, but already engine-shaped — all four correctness rules from above are in:
+
+- **Keyboard-only, synchronous hook** — `SimpleGlobalHook(GlobalHookType.Keyboard)`: mouse events are never seen, and synchronous dispatch is what makes `SuppressEvent` work.
+- **Injected events dropped** — SharpHook 7 exposes this directly as `HookEventArgs.IsEventSimulated`; no feedback loops.
+- **Auto-repeat filtered** — tracks real down/up, fires once per physical press (repeats are still suppressed so Caps Lock doesn't leak).
+- **Nothing slow on the hook thread** — the handler just writes to a `Channel`; a long-lived engine task does the typing, so re-triggers queue instead of blocking input.
 
 ## Before you build
 
