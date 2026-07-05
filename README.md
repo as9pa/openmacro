@@ -15,7 +15,7 @@ Keyboard software rarely does proper macros well (the Wooting's own Wootomation 
 | Decision | Why |
 |---|---|
 | **Native Windows desktop app** | Open it when you want macros (not an always-on service); while open it can minimize to the tray to arm/disarm, and closing it leaves nothing running. Not a browser tool, not onboard. |
-| **C# / .NET + WPF** | Windows-native; key hooks, input sending, and the Wooting SDK are all easy interop; real polished GUI. |
+| **C# / .NET 10 + WPF** | Windows-native; key hooks, input sending, and the Wooting SDK are all easy interop; real polished GUI. .NET 10 is the current LTS. |
 | **Host-side software injection** | Same method SteelSeries & DS4Windows use under the hood. Confirmed fine — it was always software. |
 | **Not stored on the keyboard** | The 60HE firmware has no macro engine (only DKS / Mod Tap / Toggle Key / remaps / 4 profiles), so macros must run in the app. |
 | **Features:** record → editable timeline w/ delays → **Once / While-held / Toggle** | The DS4Windows macro model. |
@@ -29,6 +29,11 @@ Keyboard software rarely does proper macros well (the Wooting's own Wootomation 
 1. **Capture** — while a macro is enabled, the app watches only for its *armed* trigger key(s) and decides whether to fire (see **Safety & trust** below). *(To bind a macro to a key AND stop it typing normally, it must swallow the original press.)*
 2. **Execute** — replay the recorded events with correct timing: keystrokes, text, mouse, delays, launch apps. *(This is the "software injection" part.)*
 3. **Interface** — a visual keyboard to assign binds + an editable timeline, plus JSON storage and a tray toggle. *(The biggest chunk of work.)*
+
+Two correctness rules where Capture and Execute meet:
+
+- **Ignore your own output.** Injected keystrokes pass back through the global hook, so a macro whose output includes an armed key would re-trigger itself in an infinite loop. Windows marks synthetic events (`LLKHF_INJECTED` on the hook data) — the capture callback must drop them before doing anything else. *(Check what SharpHook exposes for this; worst case, track "currently replaying" state around the simulator.)*
+- **Filter auto-repeat.** Holding a key makes Windows deliver a stream of repeated key-down events (typematic repeat). While-held and Toggle logic must track real down/up state and ignore the repeats, or a held trigger looks like dozens of presses.
 
 ## Safety & trust (a core design principle)
 
@@ -65,7 +70,7 @@ Config      = list of Profiles      // → saved to %AppData% as JSON
 
 | Job | Use | Note |
 |---|---|---|
-| Capture keys | `SharpHook` | Global hook; can suppress a key on Windows. Also runs on macOS, so you can prototype the engine now. |
+| Capture keys | `SharpHook` | Global hook; can suppress a key on Windows. Suppression only works with the *synchronous* hook (`SimpleGlobalHook`) — `TaskPoolGlobalHook` runs handlers async, after Windows has already delivered the key. Also runs on macOS, so you can prototype the engine now. |
 | Play input | `H.InputSimulator` | Sends keystrokes, text, mouse (Win32 `SendInput` underneath). SharpHook's simulator also works. |
 | Interface | `WPF + XAML` | Visual keyboard grid + macro timeline editor. Start with code-behind; learn MVVM later. |
 | Save configs | `System.Text.Json` | Built in. Serialize the Config tree to JSON in `%AppData%`. |
@@ -79,6 +84,7 @@ Macros need a **1 ms minimum delay** and intervals that stay accurate over time.
 The fix (the pattern used in [Blur-AutoClicker](https://github.com/Blur009/Blur-AutoClicker)'s engine, `worker.rs`) is an **absolute-deadline, self-correcting scheduler**:
 
 1. **Raise the timer resolution to 1 ms while a macro runs.** `timeBeginPeriod(1)` on start, `timeEndPeriod(1)` on stop (wrapped in an `IDisposable` guard). Only while firing — it's a system-wide setting. *(Blur uses the native `NtSetTimerResolution`; `timeBeginPeriod` is the documented equivalent.)*
+   **Windows 11 gotcha:** when a process has no visible window (minimized to tray — exactly this app's firing state), Windows *ignores* its timer-resolution request by default. Opt out once at startup via `SetProcessInformation` with `PROCESS_POWER_THROTTLING_IGNORE_TIMER_RESOLUTION`, or the 1 ms request silently does nothing.
 2. **Schedule against a fixed grid, not relative sleeps.** Keep a `nextFireTime` (a `Stopwatch` timestamp). Each cycle advance it by `nextFireTime += interval` — relative to the *previous target*, never to "now" — then wait only `nextFireTime - now`. If one cycle overshoots, the next automatically waits less to catch up, so the *average* interval stays exactly on target. This **is** the "how far off was it → correct the next one" mechanism; anchoring to absolute deadlines does it for free.
 3. **Hybrid sleep + spin for the last millisecond.** Coarse-sleep the bulk of the wait, then busy-spin (`Stopwatch` + `Thread.SpinWait`) the final ~1 ms for tight accuracy. *(Trade-off: spinning costs CPU — gate it behind a "high precision" toggle.)*
 4. **Clamp every delay to `max(1, value)` ms** in the data model.
@@ -154,13 +160,15 @@ hook.KeyPressed += (s, e) =>
 hook.Run();   // listen for global key events
 ```
 
-*(Shape, not gospel — check SharpHook's current API for exact names.)*
+*(Shape, not gospel — check SharpHook's current API for exact names. Note this toy version breaks two rules the real engine must keep: it does the work on the hook thread instead of signaling the engine thread, and it doesn't drop injected events — fine here only because the output text can't contain the Caps Lock trigger.)*
 
 ## Before you build
 
 - **The keyboard can't do this itself.** 60HE onboard features (DKS, Mod Tap, Toggle Key, remaps, 4 profiles) are fixed depth-rules, not recorded/timed macros.
 - **SteelSeries & DS4Windows are software too** — same injection path as AutoHotkey; the difference you liked is the GUI.
 - **Anti-cheat can flag injected input** — check the ToS of any game you'd use it with.
+- **Elevated windows are a dead zone.** Windows blocks a normal-privilege process from seeing input to, or sending input into, an elevated (admin) window — UIPI. Macros will silently neither trigger nor fire while an admin app has focus. Decide up front: document it as a known limit (recommended), or offer an optional "run as administrator" mode.
+- **Unsigned + global hook + synthetic input = looks like malware.** SmartScreen and antivirus heuristics will flag exactly this combination on first download. Plan for it: publish checksums and reproducible builds early, and expect to need a code-signing certificate for a smooth install someday. This is the flip side of the Safety & trust section.
 - **Prototype on Mac, ship on Windows** — the engine (SharpHook) runs on macOS; WPF is Windows-only.
 
 ## Resources
