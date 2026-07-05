@@ -70,7 +70,7 @@ Config      = list of Profiles      // → saved to %AppData% as JSON
 
 | Job | Use | Note |
 |---|---|---|
-| Capture keys | `SharpHook` | Global hook; can suppress a key on Windows. Suppression only works with the *synchronous* hook (`SimpleGlobalHook`) — `TaskPoolGlobalHook` runs handlers async, after Windows has already delivered the key. Also runs on macOS, so you can prototype the engine now. |
+| Capture keys | `SharpHook` | Global hook; can suppress a key on Windows. Suppression only works with the *synchronous* hook (`SimpleGlobalHook`) — `TaskPoolGlobalHook` runs handlers async, after Windows has already delivered the key. `RunAsync` puts the hook on a *foreground* thread by default, which keeps the process alive (hook and all) after `Main` returns — pass `runAsyncOnBackgroundThread: true`. Also runs on macOS, so you can prototype the engine now. |
 | Play input | `H.InputSimulator` | Sends keystrokes, text, mouse (Win32 `SendInput` underneath). SharpHook's simulator also works. |
 | Interface | `WPF + XAML` | Visual keyboard grid + macro timeline editor. Start with code-behind; learn MVVM later. |
 | Save configs | `System.Text.Json` | Built in. Serialize the Config tree to JSON in `%AppData%`. |
