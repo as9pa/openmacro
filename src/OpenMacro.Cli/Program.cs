@@ -13,7 +13,9 @@ var simulator = new EventSimulator();
 // Keyboard-only hook: the app never sees mouse events at all.
 // SimpleGlobalHook runs handlers synchronously on the hook thread —
 // required for SuppressEvent to work.
-using var hook = new SimpleGlobalHook(GlobalHookType.Keyboard);
+// The hook thread must be a background thread: a foreground thread keeps
+// the process alive after Main returns (zombie process holding the hook).
+using var hook = new SimpleGlobalHook(GlobalHookType.Keyboard, runAsyncOnBackgroundThread: true);
 
 var triggerIsDown = false;
 
