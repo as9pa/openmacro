@@ -2,7 +2,7 @@
 
 An open-source, SteelSeries-style **macro app for any keyboard** — record, edit, and replay macros — built as a native Windows app you own. Ships in two flavors: a **Core** build, and a **Wooting-integrated** build that adds analog features on a Wooting 60HE.
 
-> **Status:** timeline editing is now complete — every part of a macro is mutable after recording (see below). Next: hands-on testing, then roadmap item 5 (per-app profiles).
+> **Status:** timeline editing is complete and hand-tested — every part of a macro is mutable after recording (see below). Next: editor UX pass (inline editing, drag reorder, context menus), then roadmap item 5 (per-app profiles).
 
 ---
 
