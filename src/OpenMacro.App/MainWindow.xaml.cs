@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Input;
 using System.Windows.Media;
 using Hardcodet.Wpf.TaskbarNotification;
 using OpenMacro.Engine;
@@ -25,6 +26,10 @@ public partial class MainWindow : Window
 
     // Binding index the "Record steps" recording appends into; -1 when idle.
     private int recordTargetIndex = -1;
+
+    // Drag-to-reorder state for the timeline.
+    private Point dragStart;
+    private int dragSourceIndex = -1;
 
     // UI events also fire when we rebuild controls in code; this guard keeps
     // those programmatic changes from being treated as user edits.
@@ -120,7 +125,7 @@ public partial class MainWindow : Window
         if (Selected < 0)
             return;
 
-        Status("press any key to use it as the trigger…");
+        Status("press a key for the trigger — Esc unassigns");
         hooks.CaptureNextKey(key => Dispatcher.Invoke(() => TriggerCaptured(key)));
     }
 
@@ -129,6 +134,17 @@ public partial class MainWindow : Window
         var i = Selected;
         if (i < 0)
             return;
+
+        // Esc is reserved as "unassign", so it can never be a trigger itself.
+        if (key == KeyCode.VcEscape)
+        {
+            bindings[i] = bindings[i] with { Trigger = KeyCode.VcUndefined, Enabled = false };
+            SaveAndRearm();
+            RefreshBindingsList(i);
+            RefreshDetail();
+            Status("trigger unassigned");
+            return;
+        }
 
         var taken = bindings.Where((b, idx) => idx != i && b.Trigger == key).Any();
         if (taken)
@@ -183,7 +199,54 @@ public partial class MainWindow : Window
         SaveAndRearm();
     }
 
-    private void DuplicateBinding_Click(object sender, RoutedEventArgs e)
+    private void BindingsList_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        var i = IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
+        if (i < 0)
+        {
+            BindingsList.ContextMenu = null;
+            return;
+        }
+
+        BindingsList.SelectedIndex = i;
+
+        var menu = new ContextMenu();
+        menu.Items.Add(
+            MenuItemFor(
+                "Rename",
+                () =>
+                {
+                    NameBox.Focus();
+                    NameBox.SelectAll();
+                }
+            )
+        );
+        menu.Items.Add(MenuItemFor("Duplicate", DuplicateSelectedBinding));
+        menu.Items.Add(MenuItemFor("Delete", DeleteSelectedBinding));
+        menu.Items.Add(new Separator());
+        menu.Items.Add(
+            MenuItemFor(
+                "Open config file location",
+                () =>
+                    System.Diagnostics.Process.Start(
+                        "explorer.exe",
+                        $"/select,\"{ConfigStore.DefaultPath}\""
+                    )
+            )
+        );
+        BindingsList.ContextMenu = menu;
+    }
+
+    private void BindingsList_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Delete && Selected >= 0 && Keyboard.FocusedElement is not TextBox)
+        {
+            DeleteSelectedBinding();
+            e.Handled = true;
+        }
+    }
+
+    private void DuplicateSelectedBinding()
     {
         var i = Selected;
         if (i < 0)
@@ -205,7 +268,7 @@ public partial class MainWindow : Window
         Status("duplicated — set a trigger to arm the copy");
     }
 
-    private void DeleteBinding_Click(object sender, RoutedEventArgs e)
+    private void DeleteSelectedBinding()
     {
         var i = Selected;
         if (i < 0)
@@ -217,109 +280,265 @@ public partial class MainWindow : Window
         RefreshDetail();
     }
 
-    // ---- timeline edits ----
-
-    private void EventsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    private static MenuItem MenuItemFor(string header, Action action)
     {
-        if (refreshing)
+        var item = new MenuItem { Header = header };
+        item.Click += (_, _) => action();
+        return item;
+    }
+
+    // ---- timeline edits (double-click edits in place, drag reorders,
+    //      Delete key deletes, right-click for the rest) ----
+
+    private void EventsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        var at = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
+        if (at < 0)
             return;
 
-        // Progressive disclosure: only the editor matching the selected
-        // step's type is shown. Every step type is editable.
-        var selected = SelectedEvent();
-        DelayEditor.Visibility = selected is DelayEvent ? Visibility.Visible : Visibility.Collapsed;
-        TextEditor.Visibility = selected is TextEvent ? Visibility.Visible : Visibility.Collapsed;
+        EventsList.SelectedIndex = at;
+        BeginEditSelectedStep();
+    }
+
+    private void BeginEditSelectedStep()
+    {
         // "Engine." qualification is required: bare KeyDownEvent/KeyUpEvent in
         // a pattern resolve to UIElement's inherited RoutedEvent fields.
-        KeyEditor.Visibility = selected is Engine.KeyDownEvent or Engine.KeyUpEvent
-            ? Visibility.Visible
-            : Visibility.Collapsed;
-
-        switch (selected)
+        switch (SelectedEvent())
         {
             case DelayEvent d:
-                DelayBox.Text = d.Milliseconds.ToString();
-                break;
-            case TextEvent t:
-                EditTextBox.Text = t.Text;
-                break;
-            case Engine.KeyDownEvent or Engine.KeyUpEvent:
-                refreshing = true;
-                KeyDirBox.SelectedIndex = selected is Engine.KeyDownEvent ? 0 : 1;
-                refreshing = false;
-                break;
-        }
-    }
-
-    private void ApplyDelay_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedEvent() is not DelayEvent)
-            return;
-
-        if (!int.TryParse(DelayBox.Text, out var ms) || ms < 1)
-        {
-            Status("delay must be a whole number ≥ 1");
-            return;
-        }
-
-        ReplaceEvents(events => events[EventsList.SelectedIndex] = new DelayEvent(ms));
-    }
-
-    private void ApplyText_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedEvent() is not TextEvent)
-            return;
-
-        if (EditTextBox.Text.Length == 0)
-        {
-            Status("text can't be empty — delete the step instead");
-            return;
-        }
-
-        ReplaceEvents(events => events[EventsList.SelectedIndex] = new TextEvent(EditTextBox.Text));
-    }
-
-    private void KeyDirBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
-    {
-        if (refreshing)
-            return;
-
-        var key = SelectedEvent() switch
-        {
-            KeyDownEvent k => k.Key,
-            KeyUpEvent k => k.Key,
-            _ => KeyCode.VcUndefined,
-        };
-        if (key == KeyCode.VcUndefined)
-            return;
-
-        ReplaceEvents(events =>
-            events[EventsList.SelectedIndex] =
-                KeyDirBox.SelectedIndex == 0 ? new KeyDownEvent(key) : new KeyUpEvent(key)
-        );
-    }
-
-    private void ChangeKey_Click(object sender, RoutedEventArgs e)
-    {
-        if (SelectedEvent() is not (Engine.KeyDownEvent or Engine.KeyUpEvent))
-            return;
-
-        Status("press the new key for this step…");
-        var isDown = SelectedEvent() is Engine.KeyDownEvent;
-        hooks.CaptureNextKey(key =>
-            Dispatcher.Invoke(() =>
-            {
-                if (SelectedEvent() is not (Engine.KeyDownEvent or Engine.KeyUpEvent))
-                    return;
-
-                ReplaceEvents(events =>
-                    events[EventsList.SelectedIndex] = isDown
-                        ? new KeyDownEvent(key)
-                        : new KeyUpEvent(key)
+                BeginInlineEdit(
+                    d.Milliseconds.ToString(),
+                    text => int.TryParse(text, out var ms) && ms >= 1 ? new DelayEvent(ms) : null
                 );
-                Status($"step now {(isDown ? "presses" : "releases")} {KeyName(key)}");
-            })
-        );
+                break;
+
+            case TextEvent t:
+                BeginInlineEdit(t.Text, text => text.Length > 0 ? new TextEvent(text) : null);
+                break;
+
+            case Engine.KeyDownEvent
+            or Engine.KeyUpEvent:
+                var isDown = SelectedEvent() is Engine.KeyDownEvent;
+                Status("press the new key for this step — Esc cancels");
+                hooks.CaptureNextKey(key =>
+                    Dispatcher.Invoke(() =>
+                    {
+                        if (key == KeyCode.VcEscape)
+                        {
+                            Status("cancelled");
+                            return;
+                        }
+
+                        if (SelectedEvent() is not (Engine.KeyDownEvent or Engine.KeyUpEvent))
+                            return;
+
+                        ReplaceEvents(events =>
+                            events[EventsList.SelectedIndex] = isDown
+                                ? new KeyDownEvent(key)
+                                : new KeyUpEvent(key)
+                        );
+                        Status($"step now {(isDown ? "presses" : "releases")} {KeyName(key)}");
+                    })
+                );
+                break;
+        }
+    }
+
+    /// <summary>Swaps the selected row's label for a TextBox; Enter/focus-loss
+    /// commits (via <paramref name="commit"/>, null = invalid), Esc cancels.</summary>
+    private void BeginInlineEdit(string initial, Func<string, MacroEvent?> commit)
+    {
+        var at = EventsList.SelectedIndex;
+        if (
+            at < 0
+            || EventsList.ItemContainerGenerator.ContainerFromIndex(at) is not ListBoxItem container
+        )
+            return;
+
+        var box = new TextBox
+        {
+            Text = initial,
+            FontFamily = new FontFamily("Consolas"),
+            MinWidth = 120,
+            HorizontalAlignment = HorizontalAlignment.Left,
+        };
+
+        var done = false;
+        void Finish(bool apply)
+        {
+            if (done)
+                return;
+            done = true;
+
+            if (apply && commit(box.Text) is { } step)
+            {
+                ReplaceEvents(events => events[at] = step);
+            }
+            else
+            {
+                RefreshDetail(); // restore the plain label
+                EventsList.SelectedIndex = at;
+            }
+        }
+
+        box.KeyDown += (_, ke) =>
+        {
+            if (ke.Key == Key.Enter)
+                Finish(true);
+            else if (ke.Key == Key.Escape)
+                Finish(false);
+        };
+        box.LostFocus += (_, _) => Finish(true);
+
+        container.Content = box;
+        box.SelectAll();
+        box.Focus();
+    }
+
+    private void EventsList_RightClick(object sender, MouseButtonEventArgs e)
+    {
+        var at = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
+        if (at < 0)
+        {
+            EventsList.ContextMenu = null;
+            return;
+        }
+
+        EventsList.SelectedIndex = at;
+
+        var menu = new ContextMenu();
+        menu.Items.Add(MenuItemFor("Edit…", BeginEditSelectedStep));
+        switch (SelectedEvent())
+        {
+            case KeyDownEvent kd:
+                menu.Items.Add(
+                    MenuItemFor(
+                        "Make release",
+                        () =>
+                            ReplaceEvents(events =>
+                                events[EventsList.SelectedIndex] = new KeyUpEvent(kd.Key)
+                            )
+                    )
+                );
+                break;
+            case KeyUpEvent ku:
+                menu.Items.Add(
+                    MenuItemFor(
+                        "Make press",
+                        () =>
+                            ReplaceEvents(events =>
+                                events[EventsList.SelectedIndex] = new KeyDownEvent(ku.Key)
+                            )
+                    )
+                );
+                break;
+        }
+
+        menu.Items.Add(new Separator());
+        menu.Items.Add(MenuItemFor("Delete step", DeleteSelectedEvent));
+        EventsList.ContextMenu = menu;
+    }
+
+    private void EventsList_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (
+            e.Key == Key.Delete
+            && EventsList.SelectedIndex >= 0
+            && Keyboard.FocusedElement is not TextBox
+        )
+        {
+            DeleteSelectedEvent();
+            e.Handled = true;
+        }
+    }
+
+    private void DeleteSelectedEvent()
+    {
+        var at = EventsList.SelectedIndex;
+        if (SelectedEvent() is null)
+            return;
+
+        ReplaceEvents(events => events.RemoveAt(at));
+        EventsList.SelectedIndex = Math.Min(at, EventsList.Items.Count - 1);
+    }
+
+    // ---- drag to reorder ----
+
+    private void EventsList_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        dragStart = e.GetPosition(EventsList);
+        // Never start a drag from inside an inline editor.
+        dragSourceIndex = IsInsideInlineEditor(e.OriginalSource)
+            ? -1
+            : IndexUnderMouse(EventsList, dragStart);
+    }
+
+    private void EventsList_MouseMove(object sender, MouseEventArgs e)
+    {
+        if (dragSourceIndex < 0 || e.LeftButton != MouseButtonState.Pressed)
+            return;
+
+        var position = e.GetPosition(EventsList);
+        if (
+            Math.Abs(position.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(position.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance
+        )
+            return;
+
+        var from = dragSourceIndex;
+        dragSourceIndex = -1;
+        DragDrop.DoDragDrop(EventsList, from, DragDropEffects.Move);
+    }
+
+    private void EventsList_Drop(object sender, DragEventArgs e)
+    {
+        if (e.Data.GetData(typeof(int)) is not int from)
+            return;
+
+        var to = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
+        if (to < 0)
+            to = EventsList.Items.Count - 1; // dropped past the end
+
+        if (from == to || from < 0 || from >= EventsList.Items.Count)
+            return;
+
+        // The dragged step lands in the slot it was dropped on.
+        ReplaceEvents(events =>
+        {
+            var step = events[from];
+            events.RemoveAt(from);
+            events.Insert(Math.Min(to, events.Count), step);
+        });
+        EventsList.SelectedIndex = to;
+    }
+
+    private static bool IsInsideInlineEditor(object source)
+    {
+        var node = source as DependencyObject;
+        while (node is Visual)
+        {
+            if (node is TextBox)
+                return true;
+            node = VisualTreeHelper.GetParent(node);
+        }
+
+        return false;
+    }
+
+    private static int IndexUnderMouse(ListBox list, Point point)
+    {
+        for (var i = 0; i < list.Items.Count; i++)
+        {
+            if (list.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
+            {
+                var bounds = new Rect(item.TranslatePoint(new Point(0, 0), list), item.RenderSize);
+                if (bounds.Contains(point))
+                    return i;
+            }
+        }
+
+        return -1;
     }
 
     private void AddKey_Click(object sender, RoutedEventArgs e)
@@ -327,10 +546,16 @@ public partial class MainWindow : Window
         if (Selected < 0)
             return;
 
-        Status("press the key to insert as press+release…");
+        Status("press the key to insert as press+release — Esc cancels");
         hooks.CaptureNextKey(key =>
             Dispatcher.Invoke(() =>
             {
+                if (key == KeyCode.VcEscape)
+                {
+                    Status("cancelled");
+                    return;
+                }
+
                 InsertEvents(new KeyDownEvent(key), new DelayEvent(30), new KeyUpEvent(key));
                 Status($"inserted press + release of {KeyName(key)}");
             })
@@ -635,7 +860,6 @@ public partial class MainWindow : Window
         EventsList.Items.Clear();
         foreach (var macroEvent in b.Macro.Events)
             EventsList.Items.Add(Describe(macroEvent));
-        DelayEditor.Visibility = Visibility.Collapsed;
 
         refreshing = false;
     }
