@@ -2,7 +2,7 @@
 
 An open-source, SteelSeries-style **macro app for any keyboard** — record, edit, and replay macros — built as a native Windows app you own. Ships in two flavors: a **Core** build, and a **Wooting-integrated** build that adds analog features on a Wooting 60HE.
 
-> **Status:** Phase 3 (recorder) is built — record live keystrokes with timing, replay them, and bindings persist as editable JSON in `%AppData%\openmacro`. Next: hands-on testing, then roadmap item 4 (the GUI).
+> **Status:** Phase 3 (recorder) is built and hand-tested — record live keystrokes with timing, replay them, and bindings persist as editable JSON in `%AppData%\openmacro`. Next: roadmap item 4 (the GUI).
 
 ---
 
