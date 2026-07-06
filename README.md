@@ -2,7 +2,7 @@
 
 An open-source, SteelSeries-style **macro app for any keyboard** — record, edit, and replay macros — built as a native Windows app you own. Ships in two flavors: a **Core** build, and a **Wooting-integrated** build that adds analog features on a Wooting 60HE.
 
-> **Status:** editor UX pass is built — direct-manipulation editing (double-click, drag, Delete key, right-click menus), keyboard hidden for now, Esc reserved as "unassign". Next: hands-on testing, then roadmap item 5 (per-app profiles) or the Home/Editor split (see UI direction).
+> **Status:** editor UX pass is built and hand-tested — direct-manipulation editing (double-click, drag, Delete key, right-click menus), keyboard hidden for now, Esc reserved as "unassign". Next: drag-reorder polish, then roadmap item 5 (per-app profiles) or the Home/Editor split.
 
 ---
 
