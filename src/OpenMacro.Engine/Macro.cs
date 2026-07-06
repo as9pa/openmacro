@@ -16,4 +16,5 @@ public enum PlaybackMode
     Toggle,
 }
 
-public sealed record Binding(KeyCode Trigger, Macro Macro, PlaybackMode Mode);
+// Enabled defaults to true so configs saved before the flag existed load as enabled.
+public sealed record Binding(KeyCode Trigger, Macro Macro, PlaybackMode Mode, bool Enabled = true);
