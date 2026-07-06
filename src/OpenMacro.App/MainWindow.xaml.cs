@@ -1,7 +1,9 @@
 using System.ComponentModel;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
+using System.Windows.Interop;
 using System.Windows.Media;
 using Hardcodet.Wpf.TaskbarNotification;
 using OpenMacro.Engine;
@@ -11,9 +13,9 @@ namespace OpenMacro.App;
 
 public partial class MainWindow : Window
 {
-    private static readonly Brush SubtleText = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66));
+    private static readonly Brush SubtleText = new SolidColorBrush(Color.FromRgb(0xA3, 0x9B, 0x8E));
     private static readonly Brush BoundKeyBrush = new SolidColorBrush(
-        Color.FromRgb(0xD5, 0xE3, 0xF2)
+        Color.FromRgb(0x3B, 0x32, 0x26)
     );
 
     private readonly HookService hooks = new();
@@ -429,7 +431,7 @@ public partial class MainWindow : Window
         var box = new TextBox
         {
             Text = initial,
-            FontFamily = new FontFamily("Consolas"),
+            FontFamily = new FontFamily("Cascadia Mono, Consolas"),
             MinWidth = 120,
             HorizontalAlignment = HorizontalAlignment.Left,
         };
@@ -856,7 +858,48 @@ public partial class MainWindow : Window
         refreshing = false;
     }
 
-    private void Status(string message) => StatusText.Text = message;
+    private void Status(string message)
+    {
+        StatusText.Text = message;
+        UpdateLiveIndicators();
+    }
+
+    /// <summary>The theme's "LED": the rule under the top bar and the status
+    /// dot go amber while armed, red while recording, off when idle. Every
+    /// state change routes through <see cref="Status"/>, so this stays true.</summary>
+    private void UpdateLiveIndicators()
+    {
+        var (dot, rule) =
+            hooks.IsRecording ? ("DangerBrush", "DangerBrush")
+            : ArmToggle.IsChecked == true ? ("AccentBrush", "AccentBrush")
+            : ("InkFaintBrush", null);
+
+        StatusDot.Fill = (Brush)FindResource(dot);
+        LiveRule.Fill = rule is null ? Brushes.Transparent : (Brush)FindResource(rule);
+    }
+
+    // ---- dark title bar ----
+
+    [DllImport("dwmapi.dll")]
+    private static extern int DwmSetWindowAttribute(
+        nint hwnd,
+        int attribute,
+        ref int value,
+        int size
+    );
+
+    protected override void OnSourceInitialized(EventArgs e)
+    {
+        base.OnSourceInitialized(e);
+
+        // Ask DWM for a dark caption and paint it to match the top bar; both
+        // are best-effort (older Windows just keeps the default title bar).
+        var hwnd = new WindowInteropHelper(this).Handle;
+        var dark = 1;
+        _ = DwmSetWindowAttribute(hwnd, 20, ref dark, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE
+        var caption = 0x0027282A; // COLORREF (0x00BBGGRR) of the Surface token #2A2827
+        _ = DwmSetWindowAttribute(hwnd, 35, ref caption, sizeof(int)); // DWMWA_CAPTION_COLOR
+    }
 
     private static string Describe(MacroEvent e) =>
         e switch

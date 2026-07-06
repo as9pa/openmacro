@@ -2,27 +2,42 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="openmacro" Height="560" Width="920" MinHeight="400" MinWidth="700"
-        Background="#FBFBFB" FontSize="13">
+        Background="{StaticResource BgBrush}" Foreground="{StaticResource InkBrush}"
+        FontFamily="{StaticResource UiFont}" FontSize="13"
+        TextOptions.TextFormattingMode="Display">
     <DockPanel>
-        <!-- Top bar: arm / record / status -->
-        <Border DockPanel.Dock="Top" Background="#FFFFFF"
-                BorderBrush="#DDDDDD" BorderThickness="0,0,0,1" Padding="12,8">
+        <!-- Top bar: wordmark / arm / record / status -->
+        <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1"
+                Padding="14,9">
             <DockPanel>
+                <TextBlock Text="openmacro" FontFamily="{StaticResource MonoFont}"
+                           FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <Rectangle Width="1" Margin="14,3" Fill="{StaticResource HairlineBrush}"/>
                 <StackPanel Orientation="Horizontal">
-                    <ToggleButton x:Name="ArmToggle" Content="Arm macros" Padding="12,4"
+                    <ToggleButton x:Name="ArmToggle" Content="Arm macros"
                                   Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked"/>
-                    <Button x:Name="RecordButton" Content="Record" Padding="12,4" Margin="8,0,0,0"
+                    <Button x:Name="RecordButton" Content="Record" Margin="8,0,0,0"
                             Click="Record_Click"/>
                 </StackPanel>
-                <TextBlock x:Name="StatusText" Text="idle" Foreground="#666666"
-                           HorizontalAlignment="Right" VerticalAlignment="Center"/>
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="0,1,7,0"
+                             VerticalAlignment="Center" Fill="{StaticResource InkFaintBrush}"/>
+                    <TextBlock x:Name="StatusText" Text="idle"
+                               Foreground="{StaticResource InkMutedBrush}"
+                               VerticalAlignment="Center"/>
+                </StackPanel>
             </DockPanel>
         </Border>
 
+        <!-- The LED: lit amber while armed, red while recording, off when idle.
+             Always present so toggling never shifts the layout. -->
+        <Rectangle x:Name="LiveRule" DockPanel.Dock="Top" Height="2" Fill="Transparent"/>
+
         <!-- Bottom: visual keyboard. Hidden for now (assignment happens via
              capture); the control and its code stay for a later revisit. -->
-        <Border DockPanel.Dock="Bottom" Background="#FFFFFF" Visibility="Collapsed"
-                BorderBrush="#DDDDDD" BorderThickness="0,1,0,0">
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" Visibility="Collapsed"
+                BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0">
             <Expander Header="Keyboard" IsExpanded="True" Padding="4,4,4,8">
                 <StackPanel x:Name="KeyboardHost" HorizontalAlignment="Center" Margin="0,4,0,0"/>
             </Expander>
@@ -30,22 +45,27 @@
 
         <!-- Left: bindings (drag reorders live — wired in code by ListReorder;
              right-click for rename/duplicate/delete/etc., Delete key deletes) -->
-        <Border DockPanel.Dock="Left" Width="300" Background="#FFFFFF"
-                BorderBrush="#DDDDDD" BorderThickness="0,0,1,0">
-            <ListBox x:Name="BindingsList" BorderThickness="0" Background="Transparent"
-                     SelectionChanged="BindingsList_SelectionChanged"
-                     PreviewMouseRightButtonDown="BindingsList_RightClick"
-                     MouseDoubleClick="BindingsList_MouseDoubleClick"
-                     KeyDown="BindingsList_KeyDown"/>
+        <Border DockPanel.Dock="Left" Width="300" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,1,0">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="BINDINGS" Style="{StaticResource Eyebrow}"
+                           Margin="14,12,14,6"/>
+                <ListBox x:Name="BindingsList"
+                         SelectionChanged="BindingsList_SelectionChanged"
+                         PreviewMouseRightButtonDown="BindingsList_RightClick"
+                         MouseDoubleClick="BindingsList_MouseDoubleClick"
+                         KeyDown="BindingsList_KeyDown"/>
+            </DockPanel>
         </Border>
 
         <!-- Right: selected binding detail -->
         <Grid>
-            <TextBlock x:Name="EmptyState" Foreground="#888888" TextAlignment="Center"
+            <TextBlock x:Name="EmptyState" Foreground="{StaticResource InkFaintBrush}"
+                       TextAlignment="Center" LineHeight="22"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
                        Text="Select a binding, or press Record to create one."/>
 
-            <Grid x:Name="DetailPanel" Margin="16" Visibility="Collapsed">
+            <Grid x:Name="DetailPanel" Margin="18,14,18,14" Visibility="Collapsed">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
                     <RowDefinition Height="Auto"/>
@@ -53,15 +73,16 @@
                 </Grid.RowDefinitions>
 
                 <!-- name / trigger / mode -->
-                <Grid Grid.Row="0" Margin="0,0,0,12">
+                <Grid Grid.Row="0" Margin="0,0,0,14">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="*"/>
                         <ColumnDefinition Width="Auto"/>
                         <ColumnDefinition Width="Auto"/>
                     </Grid.ColumnDefinitions>
-                    <TextBox x:Name="NameBox" Padding="6,4" VerticalContentAlignment="Center"
+                    <TextBox x:Name="NameBox" VerticalContentAlignment="Center"
                              LostFocus="NameBox_LostFocus"/>
-                    <Button x:Name="TriggerButton" Grid.Column="1" Margin="8,0,0,0" Padding="12,4"
+                    <Button x:Name="TriggerButton" Grid.Column="1" Margin="8,0,0,0"
+                            FontFamily="{StaticResource MonoFont}" FontSize="12"
                             Click="TriggerButton_Click"/>
                     <ComboBox x:Name="ModeBox" Grid.Column="2" Width="110" Margin="8,0,0,0"
                               VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
@@ -73,23 +94,25 @@
 
                 <!-- timeline header + step tools (new steps insert after the
                      selected step, or at the end when nothing is selected) -->
-                <DockPanel Grid.Row="1" Margin="0,0,0,6">
-                    <TextBlock Text="Timeline" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                <DockPanel Grid.Row="1" Margin="0,0,0,8">
+                    <TextBlock Text="TIMELINE" Style="{StaticResource Eyebrow}"
+                               VerticalAlignment="Center"/>
                     <Button x:Name="AppendRecordButton" Content="Record steps" Margin="10,0,0,0"
-                            Padding="8,2" Click="AppendRecord_Click"/>
+                            Padding="8,3" Click="AppendRecord_Click"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="+ key" Padding="8,2" Click="AddKey_Click"/>
-                        <Button Content="+ delay" Margin="6,0,0,0" Padding="8,2" Click="AddDelay_Click"/>
-                        <TextBox x:Name="AddTextBox" Width="120" Margin="8,0,0,0" Padding="4,2"
+                        <Button Content="+ key" Padding="8,3" Click="AddKey_Click"/>
+                        <Button Content="+ delay" Margin="6,0,0,0" Padding="8,3" Click="AddDelay_Click"/>
+                        <TextBox x:Name="AddTextBox" Width="120" Margin="8,0,0,0" Padding="6,2"
                                  VerticalContentAlignment="Center"/>
-                        <Button Content="+ text" Margin="4,0,0,0" Padding="8,2" Click="AddText_Click"/>
+                        <Button Content="+ text" Margin="4,0,0,0" Padding="8,3" Click="AddText_Click"/>
                     </StackPanel>
                 </DockPanel>
 
                 <!-- steps: double-click edits in place, drag reorders live
                      (wired in code by ListReorder), Delete key deletes,
                      right-click for more -->
-                <ListBox x:Name="EventsList" Grid.Row="2" FontFamily="Consolas"
+                <ListBox x:Name="EventsList" Grid.Row="2"
+                         FontFamily="{StaticResource MonoFont}" FontSize="12.5"
                          MouseDoubleClick="EventsList_MouseDoubleClick"
                          PreviewMouseRightButtonDown="EventsList_RightClick"
                          KeyDown="EventsList_KeyDown"/>
