@@ -6,22 +6,27 @@
         FontFamily="{StaticResource UiFont}" FontSize="13"
         TextOptions.TextFormattingMode="Display">
     <DockPanel>
-        <!-- Top bar: wordmark / arm / record / status -->
-        <Border DockPanel.Dock="Top" Background="{StaticResource SurfaceBrush}"
-                BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,0,1"
-                Padding="14,9">
+        <!-- Bottom bar: status + master enable -->
+        <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}"
+                BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0"
+                Padding="12,7">
             <DockPanel>
-                <TextBlock Text="openmacro" FontFamily="{StaticResource MonoFont}"
-                           FontWeight="SemiBold" VerticalAlignment="Center"/>
-                <Rectangle Width="1" Margin="14,3" Fill="{StaticResource HairlineBrush}"/>
-                <StackPanel Orientation="Horizontal">
-                    <ToggleButton x:Name="ArmToggle" Content="Arm macros"
-                                  Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked"/>
-                    <Button x:Name="RecordButton" Content="Record" Margin="8,0,0,0"
-                            Click="Record_Click"/>
-                </StackPanel>
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="0,1,7,0"
+                <ToggleButton x:Name="ArmToggle" DockPanel.Dock="Right"
+                              ToolTip="While on, enabled macros fire on their triggers"
+                              Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked">
+                    <ToggleButton.Style>
+                        <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
+                            <Setter Property="Content" Value="Enable"/>
+                            <Style.Triggers>
+                                <Trigger Property="IsChecked" Value="True">
+                                    <Setter Property="Content" Value="Disable"/>
+                                </Trigger>
+                            </Style.Triggers>
+                        </Style>
+                    </ToggleButton.Style>
+                </ToggleButton>
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="2,1,8,0"
                              VerticalAlignment="Center" Fill="{StaticResource InkFaintBrush}"/>
                     <TextBlock x:Name="StatusText" Text="idle"
                                Foreground="{StaticResource InkMutedBrush}"
@@ -30,12 +35,13 @@
             </DockPanel>
         </Border>
 
-        <!-- The LED: lit amber while armed, red while recording, off when idle.
-             Always present so toggling never shifts the layout. -->
-        <Rectangle x:Name="LiveRule" DockPanel.Dock="Top" Height="2" Fill="Transparent"/>
+        <!-- The LED: lit in the accent color while macros are live, red while
+             recording, off when idle. Always present so toggling never shifts
+             the layout. -->
+        <Rectangle x:Name="LiveRule" DockPanel.Dock="Bottom" Height="2" Fill="Transparent"/>
 
-        <!-- Bottom: visual keyboard. Hidden for now (assignment happens via
-             capture); the control and its code stay for a later revisit. -->
+        <!-- Visual keyboard. Hidden for now (assignment happens via capture);
+             the control and its code stay for a later revisit. -->
         <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" Visibility="Collapsed"
                 BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0">
             <Expander Header="Keyboard" IsExpanded="True" Padding="4,4,4,8">
@@ -43,13 +49,18 @@
             </Expander>
         </Border>
 
-        <!-- Left: bindings (drag reorders live — wired in code by ListReorder;
-             right-click for rename/duplicate/delete/etc., Delete key deletes) -->
+        <!-- Left: macros (drag reorders live — wired in code by ListReorder;
+             right-click for run/rename/trigger/etc., Delete key deletes,
+             double-click toggles enabled) -->
         <Border DockPanel.Dock="Left" Width="300" Background="{StaticResource SurfaceBrush}"
                 BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,1,0">
             <DockPanel>
-                <TextBlock DockPanel.Dock="Top" Text="BINDINGS" Style="{StaticResource Eyebrow}"
-                           Margin="14,12,14,6"/>
+                <DockPanel DockPanel.Dock="Top" Margin="14,10,10,6">
+                    <Button DockPanel.Dock="Right" Content="+" Padding="8,0" FontSize="15"
+                            ToolTip="New macro" Click="AddMacro_Click"/>
+                    <TextBlock Text="MACROS" Style="{StaticResource Eyebrow}"
+                               VerticalAlignment="Center"/>
+                </DockPanel>
                 <ListBox x:Name="BindingsList"
                          SelectionChanged="BindingsList_SelectionChanged"
                          PreviewMouseRightButtonDown="BindingsList_RightClick"
@@ -58,12 +69,12 @@
             </DockPanel>
         </Border>
 
-        <!-- Right: selected binding detail -->
+        <!-- Right: selected macro detail -->
         <Grid>
             <TextBlock x:Name="EmptyState" Foreground="{StaticResource InkFaintBrush}"
                        TextAlignment="Center" LineHeight="22"
                        HorizontalAlignment="Center" VerticalAlignment="Center"
-                       Text="Select a binding, or press Record to create one."/>
+                       Text="Select a macro, or press + to create one."/>
 
             <Grid x:Name="DetailPanel" Margin="18,14,18,14" Visibility="Collapsed">
                 <Grid.RowDefinitions>
@@ -82,7 +93,6 @@
                     <TextBox x:Name="NameBox" VerticalContentAlignment="Center"
                              LostFocus="NameBox_LostFocus"/>
                     <Button x:Name="TriggerButton" Grid.Column="1" Margin="8,0,0,0"
-                            FontFamily="{StaticResource MonoFont}" FontSize="12"
                             Click="TriggerButton_Click"/>
                     <ComboBox x:Name="ModeBox" Grid.Column="2" Width="110" Margin="8,0,0,0"
                               VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
@@ -108,14 +118,18 @@
                     </StackPanel>
                 </DockPanel>
 
-                <!-- steps: double-click edits in place, drag reorders live
-                     (wired in code by ListReorder), Delete key deletes,
-                     right-click for more -->
-                <ListBox x:Name="EventsList" Grid.Row="2"
-                         FontFamily="{StaticResource MonoFont}" FontSize="12.5"
-                         MouseDoubleClick="EventsList_MouseDoubleClick"
-                         PreviewMouseRightButtonDown="EventsList_RightClick"
-                         KeyDown="EventsList_KeyDown"/>
+                <!-- steps: double-click edits the value in place, drag reorders
+                     live (wired in code by ListReorder), shift-click selects a
+                     range, Delete deletes the selection, right-click a row for
+                     edits or empty space for inserts -->
+                <Border Grid.Row="2" Background="{StaticResource SurfaceBrush}"
+                        BorderBrush="{StaticResource HairlineBrush}" BorderThickness="1"
+                        CornerRadius="4" Padding="2,4">
+                    <ListBox x:Name="EventsList" SelectionMode="Extended"
+                             MouseDoubleClick="EventsList_MouseDoubleClick"
+                             PreviewMouseRightButtonDown="EventsList_RightClick"
+                             KeyDown="EventsList_KeyDown"/>
+                </Border>
             </Grid>
         </Grid>
     </DockPanel>

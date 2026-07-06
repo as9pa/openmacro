@@ -94,10 +94,28 @@ public sealed class MacroEngine : IAsyncDisposable
         state.Playback = Task.Run(() => PlayAsync(state, repeat));
     }
 
+    /// <summary>
+    /// Plays a macro once, outside any binding — the "Run now" path. Honors
+    /// the same hard-stop and never leaves a key or button held down.
+    /// </summary>
+    public async Task RunOnceAsync(Macro macro)
+    {
+        var held = new HeldInput();
+        try
+        {
+            await RunCycleAsync(macro, held);
+        }
+        catch (OperationCanceledException) { }
+        finally
+        {
+            held.ReleaseAll(sink);
+        }
+    }
+
     private async Task PlayAsync(BindingState state, bool repeat)
     {
-        // Keys this playback has pressed but not yet released.
-        var held = new HashSet<KeyCode>();
+        // Keys and mouse buttons this playback has pressed but not yet released.
+        var held = new HeldInput();
 
         try
         {
@@ -126,13 +144,13 @@ public sealed class MacroEngine : IAsyncDisposable
         }
         finally
         {
-            // Never leave a key held down — whatever stopped us, release leftovers.
-            foreach (var key in held)
-                sink.KeyUp(key);
+            // Never leave a key or button held down — whatever stopped us,
+            // release leftovers.
+            held.ReleaseAll(sink);
         }
     }
 
-    private async Task RunCycleAsync(Macro macro, HashSet<KeyCode> held)
+    private async Task RunCycleAsync(Macro macro, HeldInput held)
     {
         foreach (var macroEvent in macro.Events)
         {
@@ -142,12 +160,22 @@ public sealed class MacroEngine : IAsyncDisposable
             {
                 case KeyDownEvent e:
                     sink.KeyDown(e.Key);
-                    held.Add(e.Key);
+                    held.Keys.Add(e.Key);
                     break;
 
                 case KeyUpEvent e:
                     sink.KeyUp(e.Key);
-                    held.Remove(e.Key);
+                    held.Keys.Remove(e.Key);
+                    break;
+
+                case MouseDownEvent e:
+                    sink.MouseDown(e.Button);
+                    held.Buttons.Add(e.Button);
+                    break;
+
+                case MouseUpEvent e:
+                    sink.MouseUp(e.Button);
+                    held.Buttons.Remove(e.Button);
                     break;
 
                 case TextEvent e:
@@ -158,6 +186,20 @@ public sealed class MacroEngine : IAsyncDisposable
                     await Task.Delay(e.Milliseconds, hardStop.Token);
                     break;
             }
+        }
+    }
+
+    private sealed class HeldInput
+    {
+        public HashSet<KeyCode> Keys { get; } = [];
+        public HashSet<MouseButton> Buttons { get; } = [];
+
+        public void ReleaseAll(IInputSink sink)
+        {
+            foreach (var key in Keys)
+                sink.KeyUp(key);
+            foreach (var button in Buttons)
+                sink.MouseUp(button);
         }
     }
 

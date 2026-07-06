@@ -33,6 +33,10 @@ public sealed class MacroRecorder(TimeProvider? time = null)
 
     public void OnKeyUp(KeyCode key) => Add(new KeyUpEvent(key));
 
+    public void OnMouseDown(MouseButton button) => Add(new MouseDownEvent(button));
+
+    public void OnMouseUp(MouseButton button) => Add(new MouseUpEvent(button));
+
     private void Add(MacroEvent macroEvent)
     {
         if (!IsRecording)

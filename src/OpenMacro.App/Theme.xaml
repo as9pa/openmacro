@@ -1,8 +1,10 @@
 <!--
-  openmacro dark theme: "dark case, one amber LED".
+  openmacro dark theme: "dark case, one LED".
 
-  Warm graphite surfaces with hairline borders; a single amber accent that
-  only lights up for live state (armed / selection), red while recording.
+  Warm graphite surfaces with hairline borders; a single accent that only
+  lights up for live state (enabled / selection), red while recording. The
+  accent is retinted at startup to the user's Windows accent color (see
+  App.ApplyWindowsAccent); the value here is a neutral fallback.
   Default WPF control chrome is light-themed and ignores a dark window
   background, so every control used gets a minimal dark template here.
 -->
@@ -21,8 +23,8 @@
     <Color x:Key="InkColor">#E9E4DB</Color>
     <Color x:Key="InkMutedColor">#A39B8E</Color>
     <Color x:Key="InkFaintColor">#6C655B</Color>
-    <Color x:Key="AccentColor">#E0A35C</Color>
-    <Color x:Key="AccentWashColor">#3B3226</Color>
+    <Color x:Key="AccentColor">#7C9CBF</Color>
+    <Color x:Key="AccentWashColor">#333941</Color>
     <Color x:Key="DangerColor">#D0685C</Color>
 
     <SolidColorBrush x:Key="BgBrush" Color="{StaticResource BgColor}"/>
@@ -41,7 +43,6 @@
     <SolidColorBrush x:Key="TextSelectionBrush" Color="{StaticResource AccentColor}" Opacity="0.35"/>
 
     <FontFamily x:Key="UiFont">Segoe UI Variable Text, Segoe UI</FontFamily>
-    <FontFamily x:Key="MonoFont">Cascadia Mono, Consolas</FontFamily>
 
     <!-- Small-caps section label ("BINDINGS", "TIMELINE"). -->
     <Style x:Key="Eyebrow" TargetType="TextBlock">
@@ -180,8 +181,10 @@
                                 BorderThickness="1" VerticalAlignment="Center"
                                 BorderBrush="{StaticResource HairlineStrongBrush}"
                                 Background="{StaticResource FieldBrush}">
+                            <!-- White, not theme ink: the fill underneath is the
+                                 user's accent color, which can be any hue. -->
                             <Path x:Name="Glyph" Data="M 2.5,6.5 L 5.5,9.5 L 10.5,3.5"
-                                  Stroke="{StaticResource BgBrush}" StrokeThickness="1.8"
+                                  Stroke="White" StrokeThickness="1.8"
                                   StrokeStartLineCap="Round" StrokeEndLineCap="Round"
                                   StrokeLineJoin="Round" Visibility="Collapsed"/>
                         </Border>

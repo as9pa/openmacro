@@ -17,12 +17,38 @@ public sealed class HookService : IAsyncDisposable
     private readonly object gate = new();
 
     private SimpleGlobalHook? hook;
+    private GlobalHookType hookType;
     private MacroEngine? engine;
     private Action<KeyCode>? captureCallback;
 
     public bool IsArmed => engine is not null;
 
     public bool IsRecording => recorder.IsRecording;
+
+    /// <summary>
+    /// Screen-pixel test for "is this point on our own window", set by the
+    /// UI. Clicks there while recording are operating the recorder (e.g.
+    /// pressing Stop), not part of the macro, so they are not captured.
+    /// Called on the hook thread — must not touch UI objects.
+    /// </summary>
+    public Func<short, short, bool>? IsOwnWindowPoint { get; set; }
+
+    /// <summary>
+    /// Plays a macro once, immediately — the "Run now" path. No hook or
+    /// arming involved: output is injected directly.
+    /// </summary>
+    public async Task RunMacroOnceAsync(Macro macro)
+    {
+        var oneShot = new MacroEngine(sink, []);
+        try
+        {
+            await oneShot.RunOnceAsync(macro);
+        }
+        finally
+        {
+            await oneShot.DisposeAsync();
+        }
+    }
 
     /// <summary>Arms the given bindings. Replaces any previously armed engine.</summary>
     public async Task ArmAsync(IEnumerable<Binding> bindings)
@@ -100,20 +126,50 @@ public sealed class HookService : IAsyncDisposable
     {
         var needed = engine is not null || recorder.IsRecording || captureCallback is not null;
 
-        if (needed && hook is null)
-        {
-            hook = new SimpleGlobalHook(GlobalHookType.Keyboard, runAsyncOnBackgroundThread: true);
-            hook.KeyPressed += OnKeyPressed;
-            hook.KeyReleased += OnKeyReleased;
-            _ = hook.RunAsync();
-        }
-        else if (!needed && hook is not null)
+        // Mouse events only matter while recording; the rest of the time the
+        // narrower keyboard-only hook keeps the trust story simple.
+        var neededType = recorder.IsRecording ? GlobalHookType.All : GlobalHookType.Keyboard;
+
+        if (hook is not null && (!needed || hookType != neededType))
         {
             var old = hook;
             hook = null;
             // Never dispose the hook from its own callback thread — deadlock.
             _ = Task.Run(old.Dispose);
         }
+
+        if (needed && hook is null)
+        {
+            hook = new SimpleGlobalHook(neededType, runAsyncOnBackgroundThread: true);
+            hookType = neededType;
+            hook.KeyPressed += OnKeyPressed;
+            hook.KeyReleased += OnKeyReleased;
+            hook.MousePressed += OnMousePressed;
+            hook.MouseReleased += OnMouseReleased;
+            _ = hook.RunAsync();
+        }
+    }
+
+    private void OnMousePressed(object? sender, MouseHookEventArgs e)
+    {
+        if (e.IsEventSimulated || !recorder.IsRecording)
+            return;
+
+        if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) == true)
+            return;
+
+        recorder.OnMouseDown(e.Data.Button);
+    }
+
+    private void OnMouseReleased(object? sender, MouseHookEventArgs e)
+    {
+        if (e.IsEventSimulated || !recorder.IsRecording)
+            return;
+
+        if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) == true)
+            return;
+
+        recorder.OnMouseUp(e.Data.Button);
     }
 
     private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
