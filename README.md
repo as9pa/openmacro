@@ -2,7 +2,7 @@
 
 An open-source, SteelSeries-style **macro app for any keyboard** — record, edit, and replay macros — built as a native Windows app you own. Ships in two flavors: a **Core** build, and a **Wooting-integrated** build that adds analog features on a Wooting 60HE.
 
-> **Status:** Phase 3 (recorder) is built and hand-tested — record live keystrokes with timing, replay them, and bindings persist as editable JSON in `%AppData%\openmacro`. Next: roadmap item 4 (the GUI).
+> **Status:** Phase 4 (GUI) shell is built — a WPF app with a bindings list, record flow, trigger capture, and an editable timeline. Next: hands-on testing; then the rest of item 4 (visual keyboard, tray) or item 5 (per-app profiles).
 
 ---
 
@@ -58,7 +58,7 @@ MacroEvent  ─┬─ KeyDown(key)        // press
              ├─ LaunchApp(path)
              └─ MouseClick(button)
 
-Binding     = Trigger + Macro + PlaybackMode
+Binding     = Trigger + Macro + PlaybackMode + Enabled
               Trigger      = a key   // Phase 2: key + depth threshold
               PlaybackMode = Once | WhileHeld | Toggle
 
@@ -133,11 +133,13 @@ Restraint here also serves the lightweight goal: fewer, simpler controls render 
 1. **MVP engine** ✅ — one key → one fixed keystroke sequence, firing reliably. *(global hooks, input synthesis, events)*
 2. **Playback modes** ✅ — Once / repeat while held / toggle. *(state machines, timers, async)*
 3. **Recorder** ✅ — capture live events with timing → JSON, then edit them. *(serialization, data modeling)*
-4. **The GUI** *(the long pole)* — WPF visual keyboard + editable timeline. *(XAML, data binding, MVVM)*
+4. **The GUI** *(the long pole)* — WPF visual keyboard + editable timeline. *(XAML, data binding, MVVM)* — **shell ✅** (bindings list, record flow, timeline editor); visual keyboard + tray pending
 5. **Per-app profiles** — detect foreground app, swap macro set. *(Win32 window queries)*
 6. **Analog triggers** *(Phase 2 — beats SteelSeries)* — depth thresholds via the SDK. *(P/Invoke, polling, hysteresis)*
 
-## The code so far (phases 1–3)
+## The code so far (phases 1–4)
+
+- **`src/OpenMacro.App`** — the WPF app (code-behind for now; MVVM later, per the plan). Bindings list with enable/disable, an **Arm macros** master toggle, **Record** button, press-a-key trigger capture, and an editable timeline (edit delays, add delay/text steps, reorder, delete). Saves on every change. `HookService` makes the safety rule real: the global hook exists **only** while armed, recording, or capturing a trigger — an idle window has no hook installed. Single-instance guard (a second copy just tells you it's already running).
 
 - **`src/OpenMacro.Engine`** — class library: the data model above (minus LaunchApp/MouseClick, which come later) plus `MacroEngine`, which owns per-binding state machines and playback threading. Depends on an `IInputSink` interface instead of the simulator directly, so tests record output instead of injecting real keystrokes. Also: `MacroRecorder` (live keystrokes → macro, real gaps captured as editable `Delay` events; clock injected via `TimeProvider` for testability) and `ConfigStore` (bindings ⇄ human-editable JSON at `%AppData%\openmacro\bindings.json` — key codes and event types as names, so hand-editing works until the GUI exists).
 - **`src/OpenMacro.Cli`** — console harness wiring the global hook to the engine. Loads saved bindings (or defaults: Caps Lock once, F8 while-held, F9 toggle). **F10** starts/stops recording — while recording, keys pass through and triggers are inert; the recording binds to **F11** (once) and is saved. Runs on macOS too (grant Accessibility).
