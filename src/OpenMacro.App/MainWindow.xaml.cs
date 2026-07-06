@@ -534,7 +534,7 @@ public partial class MainWindow : Window
             var position = e.GetPosition(EventsList);
             dragAdorner?.MoveTo(position.Y - grabOffsetY);
 
-            var target = ClampedIndexAt(EventsList, position);
+            var target = ReorderTargetAt(position);
             if (target >= 0 && target != reorderCurrent)
                 MoveGhost(reorderCurrent, target);
 
@@ -672,24 +672,28 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Like IndexUnderMouse, but clamps to the ends instead of
-    /// returning -1 when the pointer is above/below the items.</summary>
-    private static int ClampedIndexAt(ListBox list, Point point)
+    /// <summary>
+    /// Target slot for the drag, from pure grid arithmetic anchored to the
+    /// placeholder (which never animates). Hit-testing visual bounds here
+    /// would see mid-slide rows still overlapping the cursor and flip-flop
+    /// forever — rows are uniform height, so the math is exact.
+    /// </summary>
+    private int ReorderTargetAt(Point point)
     {
-        if (list.Items.Count == 0)
+        var count = EventsList.Items.Count;
+        if (count == 0 || reorderRowHeight <= 0 || reorderCurrent < 0)
             return -1;
 
-        var hit = IndexUnderMouse(list, point);
-        if (hit >= 0)
-            return hit;
-
         if (
-            list.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem first
-            && point.Y < first.TranslatePoint(new Point(0, 0), list).Y
+            EventsList.ItemContainerGenerator.ContainerFromIndex(reorderCurrent)
+            is not ListBoxItem ghost
         )
-            return 0;
+            return -1;
 
-        return list.Items.Count - 1;
+        var firstTop =
+            ghost.TranslatePoint(new Point(0, 0), EventsList).Y - reorderCurrent * reorderRowHeight;
+        var target = (int)Math.Floor((point.Y - firstTop) / reorderRowHeight);
+        return Math.Clamp(target, 0, count - 1);
     }
 
     private static bool IsWithin<T>(object source)
