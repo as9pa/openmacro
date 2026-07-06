@@ -1,5 +1,9 @@
 <Solution>
   <Folder Name="/src/">
     <Project Path="src/OpenMacro.Cli/OpenMacro.Cli.csproj" />
+    <Project Path="src/OpenMacro.Engine/OpenMacro.Engine.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/OpenMacro.Engine.Tests/OpenMacro.Engine.Tests.csproj" />
   </Folder>
 </Solution>
