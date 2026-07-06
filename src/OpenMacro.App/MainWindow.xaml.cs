@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
+using Hardcodet.Wpf.TaskbarNotification;
 using OpenMacro.Engine;
 using SharpHook.Data;
 
@@ -10,9 +11,17 @@ namespace OpenMacro.App;
 public partial class MainWindow : Window
 {
     private static readonly Brush SubtleText = new SolidColorBrush(Color.FromRgb(0x66, 0x66, 0x66));
+    private static readonly Brush BoundKeyBrush = new SolidColorBrush(
+        Color.FromRgb(0xD5, 0xE3, 0xF2)
+    );
 
     private readonly HookService hooks = new();
     private readonly List<Binding> bindings;
+    private readonly Dictionary<KeyCode, Button> keyButtons = [];
+
+    private Brush? defaultKeyBrush;
+    private TaskbarIcon? tray;
+    private MenuItem? trayArmItem;
 
     // UI events also fire when we rebuild controls in code; this guard keeps
     // those programmatic changes from being treated as user edits.
@@ -22,6 +31,8 @@ public partial class MainWindow : Window
     {
         InitializeComponent();
         bindings = ConfigStore.Load()?.ToList() ?? [];
+        BuildKeyboard();
+        SetupTray();
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
     }
@@ -30,10 +41,17 @@ public partial class MainWindow : Window
 
     // ---- arming ----
 
-    private async void ArmToggle_Checked(object sender, RoutedEventArgs e) => await RearmAsync();
+    private async void ArmToggle_Checked(object sender, RoutedEventArgs e)
+    {
+        if (trayArmItem is not null)
+            trayArmItem.IsChecked = true;
+        await RearmAsync();
+    }
 
     private async void ArmToggle_Unchecked(object sender, RoutedEventArgs e)
     {
+        if (trayArmItem is not null)
+            trayArmItem.IsChecked = false;
         await hooks.DisarmAsync();
         Status("disarmed — nothing is watching the keyboard");
     }
@@ -306,6 +324,115 @@ public partial class MainWindow : Window
 
         BindingsList.SelectedIndex = select;
         refreshing = false;
+        RefreshKeyboard();
+    }
+
+    // ---- visual keyboard ----
+
+    private void BuildKeyboard()
+    {
+        foreach (var row in KeyboardLayout.Rows)
+        {
+            var panel = new StackPanel { Orientation = Orientation.Horizontal };
+            foreach (var key in row)
+            {
+                var button = new Button
+                {
+                    Content = key.Label,
+                    Tag = key.Code,
+                    Width = key.Width * 38 - 3,
+                    Height = 34,
+                    Margin = new Thickness(1.5),
+                    Padding = new Thickness(0),
+                    FontSize = 11,
+                };
+                button.Click += KeyboardKey_Click;
+                defaultKeyBrush ??= button.Background;
+                keyButtons[key.Code] = button;
+                panel.Children.Add(button);
+            }
+
+            KeyboardHost.Children.Add(panel);
+        }
+    }
+
+    private void RefreshKeyboard()
+    {
+        foreach (var (code, button) in keyButtons)
+        {
+            var bound = bindings.FirstOrDefault(b => b.Trigger == code);
+            button.Background = bound is null ? defaultKeyBrush : BoundKeyBrush;
+            button.FontWeight = bound is null ? FontWeights.Normal : FontWeights.SemiBold;
+            button.ToolTip = bound is null ? null : $"{bound.Macro.Name} · {ModeLabel(bound.Mode)}";
+        }
+    }
+
+    private void KeyboardKey_Click(object sender, RoutedEventArgs e)
+    {
+        var key = (KeyCode)((Button)sender).Tag;
+        var boundIndex = bindings.FindIndex(b => b.Trigger == key);
+
+        // A bound key selects its binding; a free key becomes the selected
+        // binding's trigger.
+        if (boundIndex >= 0)
+        {
+            BindingsList.SelectedIndex = boundIndex;
+            Status($"{KeyName(key)} → {bindings[boundIndex].Macro.Name}");
+            return;
+        }
+
+        if (Selected < 0)
+        {
+            Status("select a binding first, then click a key to set its trigger");
+            return;
+        }
+
+        TriggerCaptured(key);
+    }
+
+    // ---- tray ----
+
+    private void SetupTray()
+    {
+        var show = new MenuItem { Header = "Show window" };
+        show.Click += (_, _) => RestoreFromTray();
+
+        trayArmItem = new MenuItem { Header = "Arm macros", IsCheckable = true };
+        trayArmItem.Click += (_, _) => ArmToggle.IsChecked = trayArmItem.IsChecked;
+
+        var exit = new MenuItem { Header = "Exit" };
+        exit.Click += (_, _) => Close();
+
+        var menu = new ContextMenu();
+        menu.Items.Add(show);
+        menu.Items.Add(trayArmItem);
+        menu.Items.Add(new Separator());
+        menu.Items.Add(exit);
+
+        tray = new TaskbarIcon
+        {
+            ToolTipText = "openmacro",
+            Icon = System.Drawing.SystemIcons.Application,
+            ContextMenu = menu,
+        };
+        tray.TrayLeftMouseUp += (_, _) => RestoreFromTray();
+    }
+
+    private void RestoreFromTray()
+    {
+        Show();
+        WindowState = WindowState.Normal;
+        Activate();
+    }
+
+    protected override void OnStateChanged(EventArgs e)
+    {
+        // Minimize means "get out of the way, keep macros live": hide from
+        // the taskbar and live in the tray. Closing the window exits fully.
+        if (WindowState == WindowState.Minimized)
+            Hide();
+
+        base.OnStateChanged(e);
     }
 
     private void RefreshDetail()
@@ -366,6 +493,7 @@ public partial class MainWindow : Window
     {
         // Uninstall the hook and hard-stop playback (releases held keys).
         // Blocking briefly here is fine — the window is closing.
+        tray?.Dispose();
         hooks.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
         base.OnClosing(e);
     }
