@@ -2,7 +2,7 @@
 
 An open-source, SteelSeries-style **macro app for any keyboard** — record, edit, and replay macros — built as a native Windows app you own. Ships in two flavors: a **Core** build, and a **Wooting-integrated** build that adds analog features on a Wooting 60HE.
 
-> **Status:** Phase 1 (MVP engine) is built and hand-tested — a console app in `src/OpenMacro.Cli`. Next: roadmap item 2 (playback modes).
+> **Status:** Phase 2 (playback modes) is built — the engine is now a tested class library (`src/OpenMacro.Engine`) driven by the console app. Next: hands-on testing, then roadmap item 3 (the recorder).
 
 ---
 
@@ -131,26 +131,31 @@ Restraint here also serves the lightweight goal: fewer, simpler controls render 
 ## Roadmap
 
 1. **MVP engine** ✅ — one key → one fixed keystroke sequence, firing reliably. *(global hooks, input synthesis, events)*
-2. **Playback modes** — Once / repeat while held / toggle. *(state machines, timers, async)*
+2. **Playback modes** ✅ — Once / repeat while held / toggle. *(state machines, timers, async)*
 3. **Recorder** — capture live events with timing → JSON, then edit them. *(serialization, data modeling)*
 4. **The GUI** *(the long pole)* — WPF visual keyboard + editable timeline. *(XAML, data binding, MVVM)*
 5. **Per-app profiles** — detect foreground app, swap macro set. *(Win32 window queries)*
 6. **Analog triggers** *(Phase 2 — beats SteelSeries)* — depth thresholds via the SDK. *(P/Invoke, polling, hysteresis)*
 
-## Phase 1 — the MVP engine (built)
+## The code so far (phases 1–2)
 
-`src/OpenMacro.Cli` — a console app: press Caps Lock, get `gg ez` typed. Runs on macOS too (grant Accessibility).
+- **`src/OpenMacro.Engine`** — class library: the data model above (minus LaunchApp/MouseClick, which come later) plus `MacroEngine`, which owns per-binding state machines and playback threading. Depends on an `IInputSink` interface instead of the simulator directly, so tests record output instead of injecting real keystrokes.
+- **`src/OpenMacro.Cli`** — console harness wiring the global hook to the engine, with one demo binding per mode: Caps Lock (once, types `gg ez`), F8 (while held), F9 (toggle). Runs on macOS too (grant Accessibility).
+- **`tests/OpenMacro.Engine.Tests`** — xUnit tests for the mode semantics: queuing, auto-repeat filtering, graceful stop finishing the cycle, toggle restart, and held-key release on hard stop.
 
 ```
-dotnet run --project src/OpenMacro.Cli
+dotnet run --project src/OpenMacro.Cli    # try it
+dotnet test                               # engine tests
 ```
 
-Small, but already engine-shaped — all four correctness rules from above are in:
+All four correctness rules from above are in:
 
 - **Keyboard-only, synchronous hook** — `SimpleGlobalHook(GlobalHookType.Keyboard)`: mouse events are never seen, and synchronous dispatch is what makes `SuppressEvent` work.
 - **Injected events dropped** — SharpHook 7 exposes this directly as `HookEventArgs.IsEventSimulated`; no feedback loops.
-- **Auto-repeat filtered** — tracks real down/up, fires once per physical press (repeats are still suppressed so Caps Lock doesn't leak).
-- **Nothing slow on the hook thread** — the handler just writes to a `Channel`; a long-lived engine task does the typing, so re-triggers queue instead of blocking input.
+- **Auto-repeat filtered** — the engine tracks real down/up, acts once per physical press (repeats are still suppressed so triggers don't leak).
+- **Nothing slow on the hook thread** — hook handlers only ask the engine "armed?" and signal it; playback runs on engine-owned tasks.
+
+**Stop semantics** (plan rule, now implemented): releasing a while-held trigger or toggling off finishes the cycle in progress, then stops. App exit hard-cancels mid-cycle — and either way any key the macro still holds is released. Timing currently uses coarse `Task.Delay`; the 1 ms precision scheduler from *Timing & precision* is deferred until the performance pass.
 
 ## Before you build
 
