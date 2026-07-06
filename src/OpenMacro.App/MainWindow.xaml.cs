@@ -1,11 +1,8 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
-using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
-using System.Windows.Media.Animation;
-using System.Windows.Media.Imaging;
 using Hardcodet.Wpf.TaskbarNotification;
 using OpenMacro.Engine;
 using SharpHook.Data;
@@ -30,20 +27,9 @@ public partial class MainWindow : Window
     // Binding index the "Record steps" recording appends into; -1 when idle.
     private int recordTargetIndex = -1;
 
-    // Drag-to-reorder state for the timeline.
-    private Point dragStart;
-    private int dragSourceIndex = -1;
-
-    // Live-reorder state: while true, a floating snapshot of the row rides
-    // with the cursor, the in-list row becomes a translucent placeholder,
-    // and neighbours animate out of the way.
-    private const double GhostOpacity = 0.30;
-    private bool isReordering;
-    private int reorderFrom = -1;
-    private int reorderCurrent = -1;
-    private RowDragAdorner? dragAdorner;
-    private double grabOffsetY;
-    private double reorderRowHeight;
+    // Live drag-to-reorder, one per list (see ListReorder for the visuals).
+    private readonly ListReorder eventsReorder;
+    private readonly ListReorder bindingsReorder;
 
     // UI events also fire when we rebuild controls in code; this guard keeps
     // those programmatic changes from being treated as user edits.
@@ -55,15 +41,54 @@ public partial class MainWindow : Window
         bindings = ConfigStore.Load()?.ToList() ?? [];
         BuildKeyboard();
         SetupTray();
+
+        // Both lists reorder by live drag: the timeline steps and the
+        // bindings sidebar share the same machinery.
+        eventsReorder = new ListReorder(
+            EventsList,
+            // Never start a drag from inside an inline editor.
+            blocksDrag: Rows.IsWithin<TextBox>,
+            commit: (from, to) =>
+            {
+                // The list already shows the final order; commit it to the model.
+                ReplaceEvents(events =>
+                {
+                    var step = events[from];
+                    events.RemoveAt(from);
+                    events.Insert(to, step);
+                });
+                EventsList.SelectedIndex = to;
+            },
+            cancel: from =>
+            {
+                // Rebuild to restore the model's order and clear ghosting.
+                RefreshDetail();
+                EventsList.SelectedIndex = from;
+            }
+        );
+
+        bindingsReorder = new ListReorder(
+            BindingsList,
+            // A press on the checkbox is a toggle, not a grab.
+            blocksDrag: Rows.IsWithin<CheckBox>,
+            commit: (from, to) =>
+            {
+                var moved = bindings[from];
+                bindings.RemoveAt(from);
+                bindings.Insert(to, moved);
+                SaveAndRearm();
+                RefreshBindingsList(to);
+                RefreshDetail();
+            },
+            cancel: from =>
+            {
+                RefreshBindingsList(from);
+                RefreshDetail();
+            }
+        );
+
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
-
-        // Losing capture mid-reorder (alt-tab, popup) commits what's shown.
-        EventsList.LostMouseCapture += (_, _) =>
-        {
-            if (isReordering)
-                FinishReorder(commit: true);
-        };
     }
 
     private int Selected => BindingsList.SelectedIndex;
@@ -185,7 +210,10 @@ public partial class MainWindow : Window
 
     private void BindingsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!refreshing)
+        // Mid-drag selection changes track the placeholder, not the user —
+        // the detail panel must keep showing the grabbed binding until the
+        // drop commits the model.
+        if (!refreshing && bindingsReorder is not { IsReordering: true })
             RefreshDetail();
     }
 
@@ -222,7 +250,7 @@ public partial class MainWindow : Window
 
     private void BindingsList_RightClick(object sender, MouseButtonEventArgs e)
     {
-        var i = IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
+        var i = Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
         if (i < 0)
         {
             BindingsList.ContextMenu = null;
@@ -271,10 +299,10 @@ public partial class MainWindow : Window
     {
         // The checkbox already toggled on the clicks themselves — don't
         // toggle a third time.
-        if (IsWithin<CheckBox>(e.OriginalSource))
+        if (Rows.IsWithin<CheckBox>(e.OriginalSource))
             return;
 
-        var i = IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
+        var i = Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
         if (i < 0)
             return;
 
@@ -334,7 +362,7 @@ public partial class MainWindow : Window
 
     private void EventsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        var at = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
+        var at = Rows.IndexUnderMouse(EventsList, e.GetPosition(EventsList));
         if (at < 0)
             return;
 
@@ -440,7 +468,7 @@ public partial class MainWindow : Window
 
     private void EventsList_RightClick(object sender, MouseButtonEventArgs e)
     {
-        var at = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
+        var at = Rows.IndexUnderMouse(EventsList, e.GetPosition(EventsList));
         if (at < 0)
         {
             EventsList.ContextMenu = null;
@@ -484,13 +512,6 @@ public partial class MainWindow : Window
 
     private void EventsList_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Escape && isReordering)
-        {
-            FinishReorder(commit: false);
-            e.Handled = true;
-            return;
-        }
-
         if (
             e.Key == Key.Delete
             && EventsList.SelectedIndex >= 0
@@ -510,219 +531,6 @@ public partial class MainWindow : Window
 
         ReplaceEvents(events => events.RemoveAt(at));
         EventsList.SelectedIndex = Math.Min(at, EventsList.Items.Count - 1);
-    }
-
-    // ---- drag to reorder (live: the row moves through the list with the
-    //      mouse, so it drops exactly where you see it) ----
-
-    private void EventsList_MouseDown(object sender, MouseButtonEventArgs e)
-    {
-        dragStart = e.GetPosition(EventsList);
-        // Never start a drag from inside an inline editor.
-        dragSourceIndex = IsWithin<TextBox>(e.OriginalSource)
-            ? -1
-            : IndexUnderMouse(EventsList, dragStart);
-    }
-
-    private void EventsList_MouseMove(object sender, MouseEventArgs e)
-    {
-        // Already reordering: the floating row follows the cursor
-        // continuously; the placeholder hops a slot whenever the cursor
-        // crosses a neighbour, which slides over animated.
-        if (isReordering)
-        {
-            var position = e.GetPosition(EventsList);
-            dragAdorner?.MoveTo(position.Y - grabOffsetY);
-
-            var target = ReorderTargetAt(position);
-            if (target >= 0 && target != reorderCurrent)
-                MoveGhost(reorderCurrent, target);
-
-            return;
-        }
-
-        if (dragSourceIndex < 0 || e.LeftButton != MouseButtonState.Pressed)
-            return;
-
-        var position2 = e.GetPosition(EventsList);
-        if (
-            Math.Abs(position2.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance
-            && Math.Abs(position2.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance
-        )
-            return;
-
-        // Threshold crossed: enter live-reorder mode.
-        isReordering = true;
-        reorderFrom = dragSourceIndex;
-        reorderCurrent = dragSourceIndex;
-        dragSourceIndex = -1;
-        EventsList.SelectedIndex = reorderFrom;
-        StartReorderVisuals(reorderFrom);
-        EventsList.CaptureMouse();
-        Mouse.OverrideCursor = Cursors.SizeAll;
-    }
-
-    /// <summary>Snapshots the grabbed row into a floating adorner and turns
-    /// the in-list row into a translucent placeholder.</summary>
-    private void StartReorderVisuals(int index)
-    {
-        if (EventsList.ItemContainerGenerator.ContainerFromIndex(index) is not ListBoxItem row)
-            return;
-
-        reorderRowHeight = row.ActualHeight;
-        var rowTop = row.TranslatePoint(new Point(0, 0), EventsList).Y;
-        grabOffsetY = dragStart.Y - rowTop;
-
-        // Snapshot before ghosting, so the floating copy is full-strength.
-        var width = Math.Max(1, (int)Math.Ceiling(row.ActualWidth));
-        var height = Math.Max(1, (int)Math.Ceiling(row.ActualHeight));
-        var snapshot = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
-        snapshot.Render(row);
-
-        dragAdorner = new RowDragAdorner(
-            EventsList,
-            snapshot,
-            new Size(row.ActualWidth, row.ActualHeight)
-        ).Initialized();
-        AdornerLayer.GetAdornerLayer(EventsList)?.Add(dragAdorner);
-        dragAdorner.MoveTo(rowTop);
-
-        row.Opacity = GhostOpacity;
-    }
-
-    /// <summary>Moves the placeholder to a new slot; the rows it displaces
-    /// slide one slot with a short ease-out (FLIP: start at the old offset,
-    /// animate to zero).</summary>
-    private void MoveGhost(int from, int to)
-    {
-        var item = EventsList.Items[from];
-        EventsList.Items.RemoveAt(from);
-        EventsList.Items.Insert(to, item);
-        reorderCurrent = to;
-        EventsList.SelectedIndex = to;
-        EventsList.UpdateLayout();
-
-        // Containers are recreated on insert — re-ghost the placeholder.
-        if (EventsList.ItemContainerGenerator.ContainerFromIndex(to) is ListBoxItem ghost)
-            ghost.Opacity = GhostOpacity;
-
-        var (lo, hi, fromOffset) =
-            to > from
-                ? (from, to - 1, reorderRowHeight) // ghost went down; these rows slid up
-                : (to + 1, from, -reorderRowHeight); // ghost went up; these rows slid down
-
-        for (var i = lo; i <= hi; i++)
-        {
-            if (EventsList.ItemContainerGenerator.ContainerFromIndex(i) is not ListBoxItem row)
-                continue;
-
-            var slide = new TranslateTransform(0, fromOffset);
-            row.RenderTransform = slide;
-            slide.BeginAnimation(
-                TranslateTransform.YProperty,
-                new DoubleAnimation(0, TimeSpan.FromMilliseconds(130))
-                {
-                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
-                }
-            );
-        }
-    }
-
-    private void EventsList_MouseUp(object sender, MouseButtonEventArgs e)
-    {
-        if (isReordering)
-            FinishReorder(commit: true);
-        dragSourceIndex = -1;
-    }
-
-    private void FinishReorder(bool commit)
-    {
-        isReordering = false;
-        Mouse.OverrideCursor = null;
-
-        if (dragAdorner is not null)
-        {
-            AdornerLayer.GetAdornerLayer(EventsList)?.Remove(dragAdorner);
-            dragAdorner = null;
-        }
-
-        EventsList.ReleaseMouseCapture();
-
-        var from = reorderFrom;
-        var to = reorderCurrent;
-        reorderFrom = reorderCurrent = -1;
-
-        if (commit && from >= 0 && to >= 0 && from != to)
-        {
-            // The list already shows the final order; commit it to the model.
-            ReplaceEvents(events =>
-            {
-                var step = events[from];
-                events.RemoveAt(from);
-                events.Insert(to, step);
-            });
-            EventsList.SelectedIndex = to;
-        }
-        else
-        {
-            // Cancelled, or dropped back where it started: rebuild to restore
-            // the model's order and clear ghosting/transforms.
-            RefreshDetail();
-            EventsList.SelectedIndex = from;
-        }
-    }
-
-    /// <summary>
-    /// Target slot for the drag, from pure grid arithmetic anchored to the
-    /// placeholder (which never animates). Hit-testing visual bounds here
-    /// would see mid-slide rows still overlapping the cursor and flip-flop
-    /// forever — rows are uniform height, so the math is exact.
-    /// </summary>
-    private int ReorderTargetAt(Point point)
-    {
-        var count = EventsList.Items.Count;
-        if (count == 0 || reorderRowHeight <= 0 || reorderCurrent < 0)
-            return -1;
-
-        if (
-            EventsList.ItemContainerGenerator.ContainerFromIndex(reorderCurrent)
-            is not ListBoxItem ghost
-        )
-            return -1;
-
-        var firstTop =
-            ghost.TranslatePoint(new Point(0, 0), EventsList).Y - reorderCurrent * reorderRowHeight;
-        var target = (int)Math.Floor((point.Y - firstTop) / reorderRowHeight);
-        return Math.Clamp(target, 0, count - 1);
-    }
-
-    private static bool IsWithin<T>(object source)
-        where T : DependencyObject
-    {
-        var node = source as DependencyObject;
-        while (node is Visual)
-        {
-            if (node is T)
-                return true;
-            node = VisualTreeHelper.GetParent(node);
-        }
-
-        return false;
-    }
-
-    private static int IndexUnderMouse(ListBox list, Point point)
-    {
-        for (var i = 0; i < list.Items.Count; i++)
-        {
-            if (list.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
-            {
-                var bounds = new Rect(item.TranslatePoint(new Point(0, 0), list), item.RenderSize);
-                if (bounds.Contains(point))
-                    return i;
-            }
-        }
-
-        return -1;
     }
 
     private void AddKey_Click(object sender, RoutedEventArgs e)

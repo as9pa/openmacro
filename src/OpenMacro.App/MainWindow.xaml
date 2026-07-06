@@ -28,8 +28,8 @@
             </Expander>
         </Border>
 
-        <!-- Left: bindings (right-click for rename/duplicate/delete/etc.,
-             Delete key deletes) -->
+        <!-- Left: bindings (drag reorders live — wired in code by ListReorder;
+             right-click for rename/duplicate/delete/etc., Delete key deletes) -->
         <Border DockPanel.Dock="Left" Width="300" Background="#FFFFFF"
                 BorderBrush="#DDDDDD" BorderThickness="0,0,1,0">
             <ListBox x:Name="BindingsList" BorderThickness="0" Background="Transparent"
@@ -87,13 +87,10 @@
                 </DockPanel>
 
                 <!-- steps: double-click edits in place, drag reorders live
-                     (the row moves with you), Delete key deletes,
+                     (wired in code by ListReorder), Delete key deletes,
                      right-click for more -->
                 <ListBox x:Name="EventsList" Grid.Row="2" FontFamily="Consolas"
                          MouseDoubleClick="EventsList_MouseDoubleClick"
-                         PreviewMouseLeftButtonDown="EventsList_MouseDown"
-                         PreviewMouseMove="EventsList_MouseMove"
-                         PreviewMouseLeftButtonUp="EventsList_MouseUp"
                          PreviewMouseRightButtonDown="EventsList_RightClick"
                          KeyDown="EventsList_KeyDown"/>
             </Grid>
