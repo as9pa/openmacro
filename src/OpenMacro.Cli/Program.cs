@@ -1,73 +1,67 @@
-using System.Threading.Channels;
+using OpenMacro.Engine;
 using SharpHook;
 using SharpHook.Data;
 
-const KeyCode TriggerKey = KeyCode.VcCapsLock;
-const string MacroText = "gg ez";
+Binding[] bindings =
+[
+    new(KeyCode.VcCapsLock, new Macro("type gg ez", [new TextEvent("gg ez")]), PlaybackMode.Once),
+    new(
+        KeyCode.VcF8,
+        new Macro("x while held", [new TextEvent("x"), new DelayEvent(150)]),
+        PlaybackMode.WhileHeld
+    ),
+    new(
+        KeyCode.VcF9,
+        new Macro("spam toggle", [new TextEvent("spam "), new DelayEvent(500)]),
+        PlaybackMode.Toggle
+    ),
+];
 
-// Trigger signals queue here; the engine task drains them off the hook thread.
-var triggers = Channel.CreateUnbounded<KeyCode>();
+await using var engine = new MacroEngine(new SharpHookInputSink(new EventSimulator()), bindings);
 
-var simulator = new EventSimulator();
-
-// Keyboard-only hook: the app never sees mouse events at all.
-// SimpleGlobalHook runs handlers synchronously on the hook thread —
-// required for SuppressEvent to work.
-// The hook thread must be a background thread: a foreground thread keeps
-// the process alive after Main returns (zombie process holding the hook).
+// Keyboard-only, synchronous hook (required for SuppressEvent), on a
+// background thread so it can never keep the process alive after exit.
 using var hook = new SimpleGlobalHook(GlobalHookType.Keyboard, runAsyncOnBackgroundThread: true);
-
-var triggerIsDown = false;
 
 hook.KeyPressed += (_, e) =>
 {
     // Injected keystrokes (including our own output) come back through the
     // hook; drop them or a macro containing an armed key re-triggers itself.
-    if (e.IsEventSimulated || e.Data.KeyCode != TriggerKey)
+    if (e.IsEventSimulated)
         return;
 
-    // Swallow the key so it doesn't also do its normal job (toggling Caps Lock).
-    e.SuppressEvent = true;
-
-    // Holding a key streams repeated key-downs (typematic repeat);
-    // fire once per real press.
-    if (triggerIsDown)
-        return;
-    triggerIsDown = true;
-
-    // This runs on the hook thread — a slow handler adds system-wide input
-    // lag, so just signal the engine and return.
-    triggers.Writer.TryWrite(e.Data.KeyCode);
+    // Armed trigger: swallow the key so it doesn't also do its normal job.
+    // The engine handles auto-repeat and all playback state off this thread.
+    if (engine.TriggerDown(e.Data.KeyCode))
+        e.SuppressEvent = true;
 };
 
 hook.KeyReleased += (_, e) =>
 {
-    if (e.IsEventSimulated || e.Data.KeyCode != TriggerKey)
+    if (e.IsEventSimulated)
         return;
 
-    // Suppress the release too, so apps never see an orphaned key-up.
-    e.SuppressEvent = true;
-    triggerIsDown = false;
+    if (engine.TriggerUp(e.Data.KeyCode))
+        e.SuppressEvent = true;
 };
 
-// The engine: stays alive and waiting, so a trigger wakes it instantly.
-var engine = Task.Run(async () =>
-{
-    await foreach (var _ in triggers.Reader.ReadAllAsync())
-    {
-        simulator.SimulateTextEntry(MacroText);
-    }
-});
-
-Console.WriteLine($"openmacro — phase 1. Caps Lock types \"{MacroText}\".");
-Console.WriteLine("Caps Lock is suppressed while this runs. Press Enter to quit.");
+Console.WriteLine("openmacro — phase 2: playback modes");
+Console.WriteLine(
+    """
+      Caps Lock   once         types "gg ez"
+      F8          while held   types x every 150 ms
+      F9          toggle       types "spam " every 500 ms until pressed again
+    Armed keys are suppressed while this runs. Press Enter to quit.
+    """
+);
 
 _ = hook.RunAsync();
 
 Console.ReadLine();
 
 hook.Dispose();
-triggers.Writer.Complete();
-await engine;
+
+// engine is disposed by `await using` after this: hard-stops playback and
+// releases anything still held.
 
 Console.WriteLine("Hook removed. Bye.");
