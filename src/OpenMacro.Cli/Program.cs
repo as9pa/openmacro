@@ -2,7 +2,10 @@ using OpenMacro.Engine;
 using SharpHook;
 using SharpHook.Data;
 
-Binding[] bindings =
+const KeyCode RecordKey = KeyCode.VcF10;
+const KeyCode PlaybackKey = KeyCode.VcF11;
+
+Binding[] defaults =
 [
     new(KeyCode.VcCapsLock, new Macro("type gg ez", [new TextEvent("gg ez")]), PlaybackMode.Once),
     new(
@@ -17,7 +20,12 @@ Binding[] bindings =
     ),
 ];
 
-await using var engine = new MacroEngine(new SharpHookInputSink(new EventSimulator()), bindings);
+var bindings = new List<Binding>(ConfigStore.Load() ?? defaults);
+
+var sink = new SharpHookInputSink(new EventSimulator());
+var engine = new MacroEngine(sink, bindings);
+var recorder = new MacroRecorder();
+var recordKeyIsDown = false;
 
 // Keyboard-only, synchronous hook (required for SuppressEvent), on a
 // background thread so it can never keep the process alive after exit.
@@ -25,13 +33,27 @@ using var hook = new SimpleGlobalHook(GlobalHookType.Keyboard, runAsyncOnBackgro
 
 hook.KeyPressed += (_, e) =>
 {
-    // Injected keystrokes (including our own output) come back through the
-    // hook; drop them or a macro containing an armed key re-triggers itself.
     if (e.IsEventSimulated)
         return;
 
-    // Armed trigger: swallow the key so it doesn't also do its normal job.
-    // The engine handles auto-repeat and all playback state off this thread.
+    if (e.Data.KeyCode == RecordKey)
+    {
+        e.SuppressEvent = true;
+        if (recordKeyIsDown)
+            return; // typematic repeat
+        recordKeyIsDown = true;
+        ToggleRecording();
+        return;
+    }
+
+    if (recorder.IsRecording)
+    {
+        // Record the key but let it through — you should see what you type.
+        // Macro triggers are deliberately inert while recording.
+        recorder.OnKeyDown(e.Data.KeyCode);
+        return;
+    }
+
     if (engine.TriggerDown(e.Data.KeyCode))
         e.SuppressEvent = true;
 };
@@ -41,27 +63,67 @@ hook.KeyReleased += (_, e) =>
     if (e.IsEventSimulated)
         return;
 
+    if (e.Data.KeyCode == RecordKey)
+    {
+        e.SuppressEvent = true;
+        recordKeyIsDown = false;
+        return;
+    }
+
+    if (recorder.IsRecording)
+    {
+        recorder.OnKeyUp(e.Data.KeyCode);
+        return;
+    }
+
     if (engine.TriggerUp(e.Data.KeyCode))
         e.SuppressEvent = true;
 };
 
-Console.WriteLine("openmacro — phase 2: playback modes");
-Console.WriteLine(
-    """
-      Caps Lock   once         types "gg ez"
-      F8          while held   types x every 150 ms
-      F9          toggle       types "spam " every 500 ms until pressed again
-    Armed keys are suppressed while this runs. Press Enter to quit.
-    """
-);
+Console.WriteLine("openmacro — phase 3: recorder");
+Console.WriteLine($"  F10 starts/stops recording; the recording binds to F11 (once) and is saved.");
+Console.WriteLine($"  config: {ConfigStore.DefaultPath}");
+Console.WriteLine("  bindings:");
+foreach (var b in bindings)
+    Console.WriteLine($"    {b.Trigger, -14} {b.Mode, -10} {b.Macro.Name}");
+Console.WriteLine("Armed keys are suppressed while this runs. Press Enter to quit.");
 
 _ = hook.RunAsync();
 
 Console.ReadLine();
 
 hook.Dispose();
-
-// engine is disposed by `await using` after this: hard-stops playback and
-// releases anything still held.
-
+await engine.DisposeAsync();
 Console.WriteLine("Hook removed. Bye.");
+
+void ToggleRecording()
+{
+    if (!recorder.IsRecording)
+    {
+        recorder.Start();
+        Console.WriteLine("recording... press F10 again to stop.");
+        return;
+    }
+
+    var macro = recorder.Stop($"recorded {DateTime.Now:HH:mm:ss}");
+    if (macro.Events.Count == 0)
+    {
+        Console.WriteLine("nothing recorded.");
+        return;
+    }
+
+    // Saving and the engine swap do I/O and wait on playback tasks —
+    // not work for the hook thread.
+    _ = Task.Run(async () =>
+    {
+        bindings.RemoveAll(b => b.Trigger == PlaybackKey);
+        bindings.Add(new Binding(PlaybackKey, macro, PlaybackMode.Once));
+        ConfigStore.Save(bindings);
+
+        var old = engine;
+        engine = new MacroEngine(sink, bindings);
+        await old.DisposeAsync();
+
+        Console.WriteLine($"saved {macro.Events.Count} events -> F11 (once).");
+    });
+}

@@ -2,7 +2,7 @@
 
 An open-source, SteelSeries-style **macro app for any keyboard** — record, edit, and replay macros — built as a native Windows app you own. Ships in two flavors: a **Core** build, and a **Wooting-integrated** build that adds analog features on a Wooting 60HE.
 
-> **Status:** Phase 2 (playback modes) is built and hand-tested — the engine is now a tested class library (`src/OpenMacro.Engine`) driven by the console app. Next: roadmap item 3 (the recorder).
+> **Status:** Phase 3 (recorder) is built and hand-tested — record live keystrokes with timing, replay them, and bindings persist as editable JSON in `%AppData%\openmacro`. Next: roadmap item 4 (the GUI).
 
 ---
 
@@ -132,16 +132,16 @@ Restraint here also serves the lightweight goal: fewer, simpler controls render 
 
 1. **MVP engine** ✅ — one key → one fixed keystroke sequence, firing reliably. *(global hooks, input synthesis, events)*
 2. **Playback modes** ✅ — Once / repeat while held / toggle. *(state machines, timers, async)*
-3. **Recorder** — capture live events with timing → JSON, then edit them. *(serialization, data modeling)*
+3. **Recorder** ✅ — capture live events with timing → JSON, then edit them. *(serialization, data modeling)*
 4. **The GUI** *(the long pole)* — WPF visual keyboard + editable timeline. *(XAML, data binding, MVVM)*
 5. **Per-app profiles** — detect foreground app, swap macro set. *(Win32 window queries)*
 6. **Analog triggers** *(Phase 2 — beats SteelSeries)* — depth thresholds via the SDK. *(P/Invoke, polling, hysteresis)*
 
-## The code so far (phases 1–2)
+## The code so far (phases 1–3)
 
-- **`src/OpenMacro.Engine`** — class library: the data model above (minus LaunchApp/MouseClick, which come later) plus `MacroEngine`, which owns per-binding state machines and playback threading. Depends on an `IInputSink` interface instead of the simulator directly, so tests record output instead of injecting real keystrokes.
-- **`src/OpenMacro.Cli`** — console harness wiring the global hook to the engine, with one demo binding per mode: Caps Lock (once, types `gg ez`), F8 (while held), F9 (toggle). Runs on macOS too (grant Accessibility).
-- **`tests/OpenMacro.Engine.Tests`** — xUnit tests for the mode semantics: queuing, auto-repeat filtering, graceful stop finishing the cycle, toggle restart, and held-key release on hard stop.
+- **`src/OpenMacro.Engine`** — class library: the data model above (minus LaunchApp/MouseClick, which come later) plus `MacroEngine`, which owns per-binding state machines and playback threading. Depends on an `IInputSink` interface instead of the simulator directly, so tests record output instead of injecting real keystrokes. Also: `MacroRecorder` (live keystrokes → macro, real gaps captured as editable `Delay` events; clock injected via `TimeProvider` for testability) and `ConfigStore` (bindings ⇄ human-editable JSON at `%AppData%\openmacro\bindings.json` — key codes and event types as names, so hand-editing works until the GUI exists).
+- **`src/OpenMacro.Cli`** — console harness wiring the global hook to the engine. Loads saved bindings (or defaults: Caps Lock once, F8 while-held, F9 toggle). **F10** starts/stops recording — while recording, keys pass through and triggers are inert; the recording binds to **F11** (once) and is saved. Runs on macOS too (grant Accessibility).
+- **`tests/OpenMacro.Engine.Tests`** — xUnit tests: mode semantics (queuing, auto-repeat filtering, graceful stop, toggle restart, held-key release on hard stop), recorder timing/clamping, and config round-tripping.
 
 ```
 dotnet run --project src/OpenMacro.Cli    # try it

@@ -1,8 +1,16 @@
+using System.Text.Json.Serialization;
 using SharpHook.Data;
 
 namespace OpenMacro.Engine;
 
 /// <summary>One step in a macro. A macro is an ordered list of these.</summary>
+// The "type" discriminator tells System.Text.Json which concrete record a
+// JSON object is, and keeps the config file human-editable.
+[JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
+[JsonDerivedType(typeof(KeyDownEvent), "keyDown")]
+[JsonDerivedType(typeof(KeyUpEvent), "keyUp")]
+[JsonDerivedType(typeof(TextEvent), "text")]
+[JsonDerivedType(typeof(DelayEvent), "delay")]
 public abstract record MacroEvent;
 
 public sealed record KeyDownEvent(KeyCode Key) : MacroEvent;
