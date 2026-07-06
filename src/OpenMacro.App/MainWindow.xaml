@@ -32,8 +32,10 @@
         <Border DockPanel.Dock="Left" Width="300" Background="#FFFFFF"
                 BorderBrush="#DDDDDD" BorderThickness="0,0,1,0">
             <DockPanel>
-                <Button x:Name="DeleteBindingButton" DockPanel.Dock="Bottom" Content="Delete binding"
-                        Margin="12" Padding="8,4" Click="DeleteBinding_Click"/>
+                <UniformGrid DockPanel.Dock="Bottom" Columns="2" Margin="12">
+                    <Button Content="Duplicate" Padding="8,4" Margin="0,0,4,0" Click="DuplicateBinding_Click"/>
+                    <Button Content="Delete" Padding="8,4" Margin="4,0,0,0" Click="DeleteBinding_Click"/>
+                </UniformGrid>
                 <ListBox x:Name="BindingsList" BorderThickness="0" Background="Transparent"
                          SelectionChanged="BindingsList_SelectionChanged"/>
             </DockPanel>
@@ -72,12 +74,16 @@
                     </ComboBox>
                 </Grid>
 
-                <!-- timeline header + add -->
+                <!-- timeline header + step tools (new steps insert after the
+                     selected step, or at the end when nothing is selected) -->
                 <DockPanel Grid.Row="1" Margin="0,0,0,6">
                     <TextBlock Text="Timeline" FontWeight="SemiBold" VerticalAlignment="Center"/>
+                    <Button x:Name="AppendRecordButton" Content="Record steps" Margin="10,0,0,0"
+                            Padding="8,2" Click="AppendRecord_Click"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="+ delay" Padding="8,2" Click="AddDelay_Click"/>
-                        <TextBox x:Name="AddTextBox" Width="140" Margin="8,0,0,0" Padding="4,2"
+                        <Button Content="+ key" Padding="8,2" Click="AddKey_Click"/>
+                        <Button Content="+ delay" Margin="6,0,0,0" Padding="8,2" Click="AddDelay_Click"/>
+                        <TextBox x:Name="AddTextBox" Width="120" Margin="8,0,0,0" Padding="4,2"
                                  VerticalContentAlignment="Center"/>
                         <Button Content="+ text" Margin="4,0,0,0" Padding="8,2" Click="AddText_Click"/>
                     </StackPanel>
@@ -93,6 +99,20 @@
                         <TextBox x:Name="DelayBox" Width="70" Margin="6,0" Padding="4,2"
                                  VerticalContentAlignment="Center"/>
                         <Button Content="Apply" Padding="8,2" Click="ApplyDelay_Click"/>
+                    </StackPanel>
+                    <StackPanel x:Name="TextEditor" Orientation="Horizontal" Visibility="Collapsed">
+                        <TextBlock Text="Text:" VerticalAlignment="Center"/>
+                        <TextBox x:Name="EditTextBox" Width="180" Margin="6,0" Padding="4,2"
+                                 VerticalContentAlignment="Center"/>
+                        <Button Content="Apply" Padding="8,2" Click="ApplyText_Click"/>
+                    </StackPanel>
+                    <StackPanel x:Name="KeyEditor" Orientation="Horizontal" Visibility="Collapsed">
+                        <ComboBox x:Name="KeyDirBox" Width="90" VerticalContentAlignment="Center"
+                                  SelectionChanged="KeyDirBox_SelectionChanged">
+                            <ComboBoxItem Content="press"/>
+                            <ComboBoxItem Content="release"/>
+                        </ComboBox>
+                        <Button Content="Change key…" Margin="6,0,0,0" Padding="8,2" Click="ChangeKey_Click"/>
                     </StackPanel>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                         <Button Content="Move up" Padding="8,2" Click="MoveUp_Click"/>

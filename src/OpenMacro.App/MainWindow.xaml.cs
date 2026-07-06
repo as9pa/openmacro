@@ -23,6 +23,9 @@ public partial class MainWindow : Window
     private TaskbarIcon? tray;
     private MenuItem? trayArmItem;
 
+    // Binding index the "Record steps" recording appends into; -1 when idle.
+    private int recordTargetIndex = -1;
+
     // UI events also fire when we rebuild controls in code; this guard keeps
     // those programmatic changes from being treated as user edits.
     private bool refreshing;
@@ -80,16 +83,21 @@ public partial class MainWindow : Window
 
     private void Record_Click(object sender, RoutedEventArgs e)
     {
+        if (recordTargetIndex >= 0)
+            return; // a "Record steps" recording is in progress
+
         if (!hooks.IsRecording)
         {
             hooks.StartRecording();
             RecordButton.Content = "Stop recording";
+            AppendRecordButton.IsEnabled = false;
             Status("recording — keys pass through; macro triggers are inert");
             return;
         }
 
         var macro = hooks.StopRecording($"recorded {DateTime.Now:HH:mm:ss}");
         RecordButton.Content = "Record";
+        AppendRecordButton.IsEnabled = true;
 
         if (macro.Events.Count == 0)
         {
@@ -175,6 +183,28 @@ public partial class MainWindow : Window
         SaveAndRearm();
     }
 
+    private void DuplicateBinding_Click(object sender, RoutedEventArgs e)
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        // The copy starts trigger-less and disabled so two bindings never
+        // contend for one key.
+        var copy = bindings[i] with
+        {
+            Trigger = KeyCode.VcUndefined,
+            Enabled = false,
+            Macro = bindings[i].Macro with { Name = $"{bindings[i].Macro.Name} (copy)" },
+        };
+
+        bindings.Insert(i + 1, copy);
+        ConfigStore.Save(bindings);
+        RefreshBindingsList(i + 1);
+        RefreshDetail();
+        Status("duplicated — set a trigger to arm the copy");
+    }
+
     private void DeleteBinding_Click(object sender, RoutedEventArgs e)
     {
         var i = Selected;
@@ -194,15 +224,30 @@ public partial class MainWindow : Window
         if (refreshing)
             return;
 
-        // Progressive disclosure: the delay editor appears only for delays.
-        if (SelectedEvent() is DelayEvent d)
+        // Progressive disclosure: only the editor matching the selected
+        // step's type is shown. Every step type is editable.
+        var selected = SelectedEvent();
+        DelayEditor.Visibility = selected is DelayEvent ? Visibility.Visible : Visibility.Collapsed;
+        TextEditor.Visibility = selected is TextEvent ? Visibility.Visible : Visibility.Collapsed;
+        // "Engine." qualification is required: bare KeyDownEvent/KeyUpEvent in
+        // a pattern resolve to UIElement's inherited RoutedEvent fields.
+        KeyEditor.Visibility = selected is Engine.KeyDownEvent or Engine.KeyUpEvent
+            ? Visibility.Visible
+            : Visibility.Collapsed;
+
+        switch (selected)
         {
-            DelayBox.Text = d.Milliseconds.ToString();
-            DelayEditor.Visibility = Visibility.Visible;
-        }
-        else
-        {
-            DelayEditor.Visibility = Visibility.Collapsed;
+            case DelayEvent d:
+                DelayBox.Text = d.Milliseconds.ToString();
+                break;
+            case TextEvent t:
+                EditTextBox.Text = t.Text;
+                break;
+            case Engine.KeyDownEvent or Engine.KeyUpEvent:
+                refreshing = true;
+                KeyDirBox.SelectedIndex = selected is Engine.KeyDownEvent ? 0 : 1;
+                refreshing = false;
+                break;
         }
     }
 
@@ -220,16 +265,138 @@ public partial class MainWindow : Window
         ReplaceEvents(events => events[EventsList.SelectedIndex] = new DelayEvent(ms));
     }
 
+    private void ApplyText_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedEvent() is not TextEvent)
+            return;
+
+        if (EditTextBox.Text.Length == 0)
+        {
+            Status("text can't be empty — delete the step instead");
+            return;
+        }
+
+        ReplaceEvents(events => events[EventsList.SelectedIndex] = new TextEvent(EditTextBox.Text));
+    }
+
+    private void KeyDirBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (refreshing)
+            return;
+
+        var key = SelectedEvent() switch
+        {
+            KeyDownEvent k => k.Key,
+            KeyUpEvent k => k.Key,
+            _ => KeyCode.VcUndefined,
+        };
+        if (key == KeyCode.VcUndefined)
+            return;
+
+        ReplaceEvents(events =>
+            events[EventsList.SelectedIndex] =
+                KeyDirBox.SelectedIndex == 0 ? new KeyDownEvent(key) : new KeyUpEvent(key)
+        );
+    }
+
+    private void ChangeKey_Click(object sender, RoutedEventArgs e)
+    {
+        if (SelectedEvent() is not (Engine.KeyDownEvent or Engine.KeyUpEvent))
+            return;
+
+        Status("press the new key for this step…");
+        var isDown = SelectedEvent() is Engine.KeyDownEvent;
+        hooks.CaptureNextKey(key =>
+            Dispatcher.Invoke(() =>
+            {
+                if (SelectedEvent() is not (Engine.KeyDownEvent or Engine.KeyUpEvent))
+                    return;
+
+                ReplaceEvents(events =>
+                    events[EventsList.SelectedIndex] = isDown
+                        ? new KeyDownEvent(key)
+                        : new KeyUpEvent(key)
+                );
+                Status($"step now {(isDown ? "presses" : "releases")} {KeyName(key)}");
+            })
+        );
+    }
+
+    private void AddKey_Click(object sender, RoutedEventArgs e)
+    {
+        if (Selected < 0)
+            return;
+
+        Status("press the key to insert as press+release…");
+        hooks.CaptureNextKey(key =>
+            Dispatcher.Invoke(() =>
+            {
+                InsertEvents(new KeyDownEvent(key), new DelayEvent(30), new KeyUpEvent(key));
+                Status($"inserted press + release of {KeyName(key)}");
+            })
+        );
+    }
+
     private void AddDelay_Click(object sender, RoutedEventArgs e) =>
-        ReplaceEvents(events => events.Add(new DelayEvent(100)));
+        InsertEvents(new DelayEvent(100));
 
     private void AddText_Click(object sender, RoutedEventArgs e)
     {
         if (Selected < 0 || AddTextBox.Text.Length == 0)
             return;
 
-        ReplaceEvents(events => events.Add(new TextEvent(AddTextBox.Text)));
+        InsertEvents(new TextEvent(AddTextBox.Text));
         AddTextBox.Clear();
+    }
+
+    /// <summary>Inserts after the selected step, or at the end if none is selected.</summary>
+    private void InsertEvents(params MacroEvent[] steps)
+    {
+        var i = Selected;
+        if (i < 0 || steps.Length == 0)
+            return;
+
+        var at =
+            EventsList.SelectedIndex >= 0
+                ? EventsList.SelectedIndex + 1
+                : bindings[i].Macro.Events.Count;
+
+        ReplaceEventsAt(i, events => events.InsertRange(at, steps));
+        EventsList.SelectedIndex = Math.Min(at + steps.Length - 1, EventsList.Items.Count - 1);
+    }
+
+    // ---- append recording into an existing macro ----
+
+    private void AppendRecord_Click(object sender, RoutedEventArgs e)
+    {
+        if (recordTargetIndex < 0)
+        {
+            if (Selected < 0 || hooks.IsRecording)
+                return;
+
+            // Remember the target now: selection may change while recording.
+            recordTargetIndex = Selected;
+            hooks.StartRecording();
+            AppendRecordButton.Content = "Stop";
+            RecordButton.IsEnabled = false;
+            Status("recording steps into this macro — keys pass through");
+            return;
+        }
+
+        var recorded = hooks.StopRecording("steps");
+        var target = recordTargetIndex;
+        recordTargetIndex = -1;
+        AppendRecordButton.Content = "Record steps";
+        RecordButton.IsEnabled = true;
+
+        if (recorded.Events.Count == 0)
+        {
+            Status("nothing recorded");
+            return;
+        }
+
+        ReplaceEventsAt(target, events => events.AddRange(recorded.Events));
+        Status($"added {recorded.Events.Count} recorded steps");
     }
 
     private void MoveUp_Click(object sender, RoutedEventArgs e) => MoveEvent(-1);
@@ -264,10 +431,22 @@ public partial class MainWindow : Window
         return i >= 0 && at >= 0 ? bindings[i].Macro.Events[at] : null;
     }
 
+    /// <summary>Mutates the selected binding's steps, preserving step selection.</summary>
     private void ReplaceEvents(Action<List<MacroEvent>> mutate)
     {
-        var i = Selected;
-        if (i < 0)
+        var keepEventSelection = EventsList.SelectedIndex;
+        ReplaceEventsAt(Selected, mutate);
+        EventsList.SelectedIndex = Math.Min(keepEventSelection, EventsList.Items.Count - 1);
+    }
+
+    /// <summary>
+    /// Mutates a specific binding's steps — the target is an index, not the
+    /// selection, so "Record steps" still lands in the right macro if the
+    /// selection changed while recording.
+    /// </summary>
+    private void ReplaceEventsAt(int i, Action<List<MacroEvent>> mutate)
+    {
+        if (i < 0 || i >= bindings.Count)
             return;
 
         var events = bindings[i].Macro.Events.ToList();
@@ -275,9 +454,8 @@ public partial class MainWindow : Window
         bindings[i] = bindings[i] with { Macro = bindings[i].Macro with { Events = events } };
 
         SaveAndRearm();
-        var keepEventSelection = EventsList.SelectedIndex;
+        RefreshBindingsList(Selected); // keeps the "N events" label current
         RefreshDetail();
-        EventsList.SelectedIndex = Math.Min(keepEventSelection, EventsList.Items.Count - 1);
     }
 
     // ---- refresh ----
