@@ -27,9 +27,9 @@ public partial class MainWindow : Window
     // Binding index the "Record steps" recording appends into; -1 when idle.
     private int recordTargetIndex = -1;
 
-    // Drag-to-reorder state for the timeline.
-    private Point dragStart;
-    private int dragSourceIndex = -1;
+    // Live drag-to-reorder, one per list (see ListReorder for the visuals).
+    private readonly ListReorder eventsReorder;
+    private readonly ListReorder bindingsReorder;
 
     // UI events also fire when we rebuild controls in code; this guard keeps
     // those programmatic changes from being treated as user edits.
@@ -41,6 +41,52 @@ public partial class MainWindow : Window
         bindings = ConfigStore.Load()?.ToList() ?? [];
         BuildKeyboard();
         SetupTray();
+
+        // Both lists reorder by live drag: the timeline steps and the
+        // bindings sidebar share the same machinery.
+        eventsReorder = new ListReorder(
+            EventsList,
+            // Never start a drag from inside an inline editor.
+            blocksDrag: Rows.IsWithin<TextBox>,
+            commit: (from, to) =>
+            {
+                // The list already shows the final order; commit it to the model.
+                ReplaceEvents(events =>
+                {
+                    var step = events[from];
+                    events.RemoveAt(from);
+                    events.Insert(to, step);
+                });
+                EventsList.SelectedIndex = to;
+            },
+            cancel: from =>
+            {
+                // Rebuild to restore the model's order and clear ghosting.
+                RefreshDetail();
+                EventsList.SelectedIndex = from;
+            }
+        );
+
+        bindingsReorder = new ListReorder(
+            BindingsList,
+            // A press on the checkbox is a toggle, not a grab.
+            blocksDrag: Rows.IsWithin<CheckBox>,
+            commit: (from, to) =>
+            {
+                var moved = bindings[from];
+                bindings.RemoveAt(from);
+                bindings.Insert(to, moved);
+                SaveAndRearm();
+                RefreshBindingsList(to);
+                RefreshDetail();
+            },
+            cancel: from =>
+            {
+                RefreshBindingsList(from);
+                RefreshDetail();
+            }
+        );
+
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
     }
@@ -164,7 +210,10 @@ public partial class MainWindow : Window
 
     private void BindingsList_SelectionChanged(object sender, SelectionChangedEventArgs e)
     {
-        if (!refreshing)
+        // Mid-drag selection changes track the placeholder, not the user —
+        // the detail panel must keep showing the grabbed binding until the
+        // drop commits the model.
+        if (!refreshing && bindingsReorder is not { IsReordering: true })
             RefreshDetail();
     }
 
@@ -201,7 +250,7 @@ public partial class MainWindow : Window
 
     private void BindingsList_RightClick(object sender, MouseButtonEventArgs e)
     {
-        var i = IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
+        var i = Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
         if (i < 0)
         {
             BindingsList.ContextMenu = null;
@@ -244,6 +293,27 @@ public partial class MainWindow : Window
             DeleteSelectedBinding();
             e.Handled = true;
         }
+    }
+
+    private void BindingsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // The checkbox already toggled on the clicks themselves — don't
+        // toggle a third time.
+        if (Rows.IsWithin<CheckBox>(e.OriginalSource))
+            return;
+
+        var i = Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
+        if (i < 0)
+            return;
+
+        bindings[i] = bindings[i] with { Enabled = !bindings[i].Enabled };
+        SaveAndRearm();
+        RefreshBindingsList(i);
+        Status(
+            bindings[i].Enabled
+                ? $"{bindings[i].Macro.Name}: enabled"
+                : $"{bindings[i].Macro.Name}: disabled"
+        );
     }
 
     private void DuplicateSelectedBinding()
@@ -292,7 +362,7 @@ public partial class MainWindow : Window
 
     private void EventsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
-        var at = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
+        var at = Rows.IndexUnderMouse(EventsList, e.GetPosition(EventsList));
         if (at < 0)
             return;
 
@@ -398,7 +468,7 @@ public partial class MainWindow : Window
 
     private void EventsList_RightClick(object sender, MouseButtonEventArgs e)
     {
-        var at = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
+        var at = Rows.IndexUnderMouse(EventsList, e.GetPosition(EventsList));
         if (at < 0)
         {
             EventsList.ContextMenu = null;
@@ -461,84 +531,6 @@ public partial class MainWindow : Window
 
         ReplaceEvents(events => events.RemoveAt(at));
         EventsList.SelectedIndex = Math.Min(at, EventsList.Items.Count - 1);
-    }
-
-    // ---- drag to reorder ----
-
-    private void EventsList_MouseDown(object sender, MouseButtonEventArgs e)
-    {
-        dragStart = e.GetPosition(EventsList);
-        // Never start a drag from inside an inline editor.
-        dragSourceIndex = IsInsideInlineEditor(e.OriginalSource)
-            ? -1
-            : IndexUnderMouse(EventsList, dragStart);
-    }
-
-    private void EventsList_MouseMove(object sender, MouseEventArgs e)
-    {
-        if (dragSourceIndex < 0 || e.LeftButton != MouseButtonState.Pressed)
-            return;
-
-        var position = e.GetPosition(EventsList);
-        if (
-            Math.Abs(position.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance
-            && Math.Abs(position.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance
-        )
-            return;
-
-        var from = dragSourceIndex;
-        dragSourceIndex = -1;
-        DragDrop.DoDragDrop(EventsList, from, DragDropEffects.Move);
-    }
-
-    private void EventsList_Drop(object sender, DragEventArgs e)
-    {
-        if (e.Data.GetData(typeof(int)) is not int from)
-            return;
-
-        var to = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
-        if (to < 0)
-            to = EventsList.Items.Count - 1; // dropped past the end
-
-        if (from == to || from < 0 || from >= EventsList.Items.Count)
-            return;
-
-        // The dragged step lands in the slot it was dropped on.
-        ReplaceEvents(events =>
-        {
-            var step = events[from];
-            events.RemoveAt(from);
-            events.Insert(Math.Min(to, events.Count), step);
-        });
-        EventsList.SelectedIndex = to;
-    }
-
-    private static bool IsInsideInlineEditor(object source)
-    {
-        var node = source as DependencyObject;
-        while (node is Visual)
-        {
-            if (node is TextBox)
-                return true;
-            node = VisualTreeHelper.GetParent(node);
-        }
-
-        return false;
-    }
-
-    private static int IndexUnderMouse(ListBox list, Point point)
-    {
-        for (var i = 0; i < list.Items.Count; i++)
-        {
-            if (list.ItemContainerGenerator.ContainerFromIndex(i) is ListBoxItem item)
-            {
-                var bounds = new Rect(item.TranslatePoint(new Point(0, 0), list), item.RenderSize);
-                if (bounds.Contains(point))
-                    return i;
-            }
-        }
-
-        return -1;
     }
 
     private void AddKey_Click(object sender, RoutedEventArgs e)

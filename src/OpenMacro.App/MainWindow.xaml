@@ -28,13 +28,14 @@
             </Expander>
         </Border>
 
-        <!-- Left: bindings (right-click for rename/duplicate/delete/etc.,
-             Delete key deletes) -->
+        <!-- Left: bindings (drag reorders live — wired in code by ListReorder;
+             right-click for rename/duplicate/delete/etc., Delete key deletes) -->
         <Border DockPanel.Dock="Left" Width="300" Background="#FFFFFF"
                 BorderBrush="#DDDDDD" BorderThickness="0,0,1,0">
             <ListBox x:Name="BindingsList" BorderThickness="0" Background="Transparent"
                      SelectionChanged="BindingsList_SelectionChanged"
                      PreviewMouseRightButtonDown="BindingsList_RightClick"
+                     MouseDoubleClick="BindingsList_MouseDoubleClick"
                      KeyDown="BindingsList_KeyDown"/>
         </Border>
 
@@ -85,14 +86,12 @@
                     </StackPanel>
                 </DockPanel>
 
-                <!-- steps: double-click edits in place, drag reorders,
-                     Delete key deletes, right-click for more -->
-                <ListBox x:Name="EventsList" Grid.Row="2" FontFamily="Consolas" AllowDrop="True"
+                <!-- steps: double-click edits in place, drag reorders live
+                     (wired in code by ListReorder), Delete key deletes,
+                     right-click for more -->
+                <ListBox x:Name="EventsList" Grid.Row="2" FontFamily="Consolas"
                          MouseDoubleClick="EventsList_MouseDoubleClick"
-                         PreviewMouseLeftButtonDown="EventsList_MouseDown"
-                         PreviewMouseMove="EventsList_MouseMove"
                          PreviewMouseRightButtonDown="EventsList_RightClick"
-                         Drop="EventsList_Drop"
                          KeyDown="EventsList_KeyDown"/>
             </Grid>
         </Grid>
