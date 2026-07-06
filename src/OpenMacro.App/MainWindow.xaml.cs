@@ -1,8 +1,11 @@
 using System.ComponentModel;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Imaging;
 using Hardcodet.Wpf.TaskbarNotification;
 using OpenMacro.Engine;
 using SharpHook.Data;
@@ -31,10 +34,16 @@ public partial class MainWindow : Window
     private Point dragStart;
     private int dragSourceIndex = -1;
 
-    // Live-reorder state: while true, the selected row follows the mouse.
+    // Live-reorder state: while true, a floating snapshot of the row rides
+    // with the cursor, the in-list row becomes a translucent placeholder,
+    // and neighbours animate out of the way.
+    private const double GhostOpacity = 0.30;
     private bool isReordering;
     private int reorderFrom = -1;
     private int reorderCurrent = -1;
+    private RowDragAdorner? dragAdorner;
+    private double grabOffsetY;
+    private double reorderRowHeight;
 
     // UI events also fire when we rebuild controls in code; this guard keeps
     // those programmatic changes from being treated as user edits.
@@ -517,18 +526,17 @@ public partial class MainWindow : Window
 
     private void EventsList_MouseMove(object sender, MouseEventArgs e)
     {
-        // Already reordering: follow the mouse, moving the row live.
+        // Already reordering: the floating row follows the cursor
+        // continuously; the placeholder hops a slot whenever the cursor
+        // crosses a neighbour, which slides over animated.
         if (isReordering)
         {
-            var target = ClampedIndexAt(EventsList, e.GetPosition(EventsList));
+            var position = e.GetPosition(EventsList);
+            dragAdorner?.MoveTo(position.Y - grabOffsetY);
+
+            var target = ClampedIndexAt(EventsList, position);
             if (target >= 0 && target != reorderCurrent)
-            {
-                var item = EventsList.Items[reorderCurrent];
-                EventsList.Items.RemoveAt(reorderCurrent);
-                EventsList.Items.Insert(target, item);
-                reorderCurrent = target;
-                EventsList.SelectedIndex = target;
-            }
+                MoveGhost(reorderCurrent, target);
 
             return;
         }
@@ -536,10 +544,10 @@ public partial class MainWindow : Window
         if (dragSourceIndex < 0 || e.LeftButton != MouseButtonState.Pressed)
             return;
 
-        var position = e.GetPosition(EventsList);
+        var position2 = e.GetPosition(EventsList);
         if (
-            Math.Abs(position.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance
-            && Math.Abs(position.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance
+            Math.Abs(position2.X - dragStart.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(position2.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance
         )
             return;
 
@@ -549,8 +557,75 @@ public partial class MainWindow : Window
         reorderCurrent = dragSourceIndex;
         dragSourceIndex = -1;
         EventsList.SelectedIndex = reorderFrom;
+        StartReorderVisuals(reorderFrom);
         EventsList.CaptureMouse();
         Mouse.OverrideCursor = Cursors.SizeAll;
+    }
+
+    /// <summary>Snapshots the grabbed row into a floating adorner and turns
+    /// the in-list row into a translucent placeholder.</summary>
+    private void StartReorderVisuals(int index)
+    {
+        if (EventsList.ItemContainerGenerator.ContainerFromIndex(index) is not ListBoxItem row)
+            return;
+
+        reorderRowHeight = row.ActualHeight;
+        var rowTop = row.TranslatePoint(new Point(0, 0), EventsList).Y;
+        grabOffsetY = dragStart.Y - rowTop;
+
+        // Snapshot before ghosting, so the floating copy is full-strength.
+        var width = Math.Max(1, (int)Math.Ceiling(row.ActualWidth));
+        var height = Math.Max(1, (int)Math.Ceiling(row.ActualHeight));
+        var snapshot = new RenderTargetBitmap(width, height, 96, 96, PixelFormats.Pbgra32);
+        snapshot.Render(row);
+
+        dragAdorner = new RowDragAdorner(
+            EventsList,
+            snapshot,
+            new Size(row.ActualWidth, row.ActualHeight)
+        ).Initialized();
+        AdornerLayer.GetAdornerLayer(EventsList)?.Add(dragAdorner);
+        dragAdorner.MoveTo(rowTop);
+
+        row.Opacity = GhostOpacity;
+    }
+
+    /// <summary>Moves the placeholder to a new slot; the rows it displaces
+    /// slide one slot with a short ease-out (FLIP: start at the old offset,
+    /// animate to zero).</summary>
+    private void MoveGhost(int from, int to)
+    {
+        var item = EventsList.Items[from];
+        EventsList.Items.RemoveAt(from);
+        EventsList.Items.Insert(to, item);
+        reorderCurrent = to;
+        EventsList.SelectedIndex = to;
+        EventsList.UpdateLayout();
+
+        // Containers are recreated on insert — re-ghost the placeholder.
+        if (EventsList.ItemContainerGenerator.ContainerFromIndex(to) is ListBoxItem ghost)
+            ghost.Opacity = GhostOpacity;
+
+        var (lo, hi, fromOffset) =
+            to > from
+                ? (from, to - 1, reorderRowHeight) // ghost went down; these rows slid up
+                : (to + 1, from, -reorderRowHeight); // ghost went up; these rows slid down
+
+        for (var i = lo; i <= hi; i++)
+        {
+            if (EventsList.ItemContainerGenerator.ContainerFromIndex(i) is not ListBoxItem row)
+                continue;
+
+            var slide = new TranslateTransform(0, fromOffset);
+            row.RenderTransform = slide;
+            slide.BeginAnimation(
+                TranslateTransform.YProperty,
+                new DoubleAnimation(0, TimeSpan.FromMilliseconds(130))
+                {
+                    EasingFunction = new QuadraticEase { EasingMode = EasingMode.EaseOut },
+                }
+            );
+        }
     }
 
     private void EventsList_MouseUp(object sender, MouseButtonEventArgs e)
@@ -564,6 +639,13 @@ public partial class MainWindow : Window
     {
         isReordering = false;
         Mouse.OverrideCursor = null;
+
+        if (dragAdorner is not null)
+        {
+            AdornerLayer.GetAdornerLayer(EventsList)?.Remove(dragAdorner);
+            dragAdorner = null;
+        }
+
         EventsList.ReleaseMouseCapture();
 
         var from = reorderFrom;
@@ -581,9 +663,11 @@ public partial class MainWindow : Window
             });
             EventsList.SelectedIndex = to;
         }
-        else if (!commit)
+        else
         {
-            RefreshDetail(); // restore the model's order
+            // Cancelled, or dropped back where it started: rebuild to restore
+            // the model's order and clear ghosting/transforms.
+            RefreshDetail();
             EventsList.SelectedIndex = from;
         }
     }
