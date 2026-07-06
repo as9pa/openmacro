@@ -35,6 +35,7 @@
             <ListBox x:Name="BindingsList" BorderThickness="0" Background="Transparent"
                      SelectionChanged="BindingsList_SelectionChanged"
                      PreviewMouseRightButtonDown="BindingsList_RightClick"
+                     MouseDoubleClick="BindingsList_MouseDoubleClick"
                      KeyDown="BindingsList_KeyDown"/>
         </Border>
 
@@ -85,14 +86,15 @@
                     </StackPanel>
                 </DockPanel>
 
-                <!-- steps: double-click edits in place, drag reorders,
-                     Delete key deletes, right-click for more -->
-                <ListBox x:Name="EventsList" Grid.Row="2" FontFamily="Consolas" AllowDrop="True"
+                <!-- steps: double-click edits in place, drag reorders live
+                     (the row moves with you), Delete key deletes,
+                     right-click for more -->
+                <ListBox x:Name="EventsList" Grid.Row="2" FontFamily="Consolas"
                          MouseDoubleClick="EventsList_MouseDoubleClick"
                          PreviewMouseLeftButtonDown="EventsList_MouseDown"
                          PreviewMouseMove="EventsList_MouseMove"
+                         PreviewMouseLeftButtonUp="EventsList_MouseUp"
                          PreviewMouseRightButtonDown="EventsList_RightClick"
-                         Drop="EventsList_Drop"
                          KeyDown="EventsList_KeyDown"/>
             </Grid>
         </Grid>

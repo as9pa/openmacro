@@ -31,6 +31,11 @@ public partial class MainWindow : Window
     private Point dragStart;
     private int dragSourceIndex = -1;
 
+    // Live-reorder state: while true, the selected row follows the mouse.
+    private bool isReordering;
+    private int reorderFrom = -1;
+    private int reorderCurrent = -1;
+
     // UI events also fire when we rebuild controls in code; this guard keeps
     // those programmatic changes from being treated as user edits.
     private bool refreshing;
@@ -43,6 +48,13 @@ public partial class MainWindow : Window
         SetupTray();
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
+
+        // Losing capture mid-reorder (alt-tab, popup) commits what's shown.
+        EventsList.LostMouseCapture += (_, _) =>
+        {
+            if (isReordering)
+                FinishReorder(commit: true);
+        };
     }
 
     private int Selected => BindingsList.SelectedIndex;
@@ -246,6 +258,27 @@ public partial class MainWindow : Window
         }
     }
 
+    private void BindingsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
+    {
+        // The checkbox already toggled on the clicks themselves — don't
+        // toggle a third time.
+        if (IsWithin<CheckBox>(e.OriginalSource))
+            return;
+
+        var i = IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
+        if (i < 0)
+            return;
+
+        bindings[i] = bindings[i] with { Enabled = !bindings[i].Enabled };
+        SaveAndRearm();
+        RefreshBindingsList(i);
+        Status(
+            bindings[i].Enabled
+                ? $"{bindings[i].Macro.Name}: enabled"
+                : $"{bindings[i].Macro.Name}: disabled"
+        );
+    }
+
     private void DuplicateSelectedBinding()
     {
         var i = Selected;
@@ -442,6 +475,13 @@ public partial class MainWindow : Window
 
     private void EventsList_KeyDown(object sender, KeyEventArgs e)
     {
+        if (e.Key == Key.Escape && isReordering)
+        {
+            FinishReorder(commit: false);
+            e.Handled = true;
+            return;
+        }
+
         if (
             e.Key == Key.Delete
             && EventsList.SelectedIndex >= 0
@@ -463,19 +503,36 @@ public partial class MainWindow : Window
         EventsList.SelectedIndex = Math.Min(at, EventsList.Items.Count - 1);
     }
 
-    // ---- drag to reorder ----
+    // ---- drag to reorder (live: the row moves through the list with the
+    //      mouse, so it drops exactly where you see it) ----
 
     private void EventsList_MouseDown(object sender, MouseButtonEventArgs e)
     {
         dragStart = e.GetPosition(EventsList);
         // Never start a drag from inside an inline editor.
-        dragSourceIndex = IsInsideInlineEditor(e.OriginalSource)
+        dragSourceIndex = IsWithin<TextBox>(e.OriginalSource)
             ? -1
             : IndexUnderMouse(EventsList, dragStart);
     }
 
     private void EventsList_MouseMove(object sender, MouseEventArgs e)
     {
+        // Already reordering: follow the mouse, moving the row live.
+        if (isReordering)
+        {
+            var target = ClampedIndexAt(EventsList, e.GetPosition(EventsList));
+            if (target >= 0 && target != reorderCurrent)
+            {
+                var item = EventsList.Items[reorderCurrent];
+                EventsList.Items.RemoveAt(reorderCurrent);
+                EventsList.Items.Insert(target, item);
+                reorderCurrent = target;
+                EventsList.SelectedIndex = target;
+            }
+
+            return;
+        }
+
         if (dragSourceIndex < 0 || e.LeftButton != MouseButtonState.Pressed)
             return;
 
@@ -486,39 +543,78 @@ public partial class MainWindow : Window
         )
             return;
 
-        var from = dragSourceIndex;
+        // Threshold crossed: enter live-reorder mode.
+        isReordering = true;
+        reorderFrom = dragSourceIndex;
+        reorderCurrent = dragSourceIndex;
         dragSourceIndex = -1;
-        DragDrop.DoDragDrop(EventsList, from, DragDropEffects.Move);
+        EventsList.SelectedIndex = reorderFrom;
+        EventsList.CaptureMouse();
+        Mouse.OverrideCursor = Cursors.SizeAll;
     }
 
-    private void EventsList_Drop(object sender, DragEventArgs e)
+    private void EventsList_MouseUp(object sender, MouseButtonEventArgs e)
     {
-        if (e.Data.GetData(typeof(int)) is not int from)
-            return;
-
-        var to = IndexUnderMouse(EventsList, e.GetPosition(EventsList));
-        if (to < 0)
-            to = EventsList.Items.Count - 1; // dropped past the end
-
-        if (from == to || from < 0 || from >= EventsList.Items.Count)
-            return;
-
-        // The dragged step lands in the slot it was dropped on.
-        ReplaceEvents(events =>
-        {
-            var step = events[from];
-            events.RemoveAt(from);
-            events.Insert(Math.Min(to, events.Count), step);
-        });
-        EventsList.SelectedIndex = to;
+        if (isReordering)
+            FinishReorder(commit: true);
+        dragSourceIndex = -1;
     }
 
-    private static bool IsInsideInlineEditor(object source)
+    private void FinishReorder(bool commit)
+    {
+        isReordering = false;
+        Mouse.OverrideCursor = null;
+        EventsList.ReleaseMouseCapture();
+
+        var from = reorderFrom;
+        var to = reorderCurrent;
+        reorderFrom = reorderCurrent = -1;
+
+        if (commit && from >= 0 && to >= 0 && from != to)
+        {
+            // The list already shows the final order; commit it to the model.
+            ReplaceEvents(events =>
+            {
+                var step = events[from];
+                events.RemoveAt(from);
+                events.Insert(to, step);
+            });
+            EventsList.SelectedIndex = to;
+        }
+        else if (!commit)
+        {
+            RefreshDetail(); // restore the model's order
+            EventsList.SelectedIndex = from;
+        }
+    }
+
+    /// <summary>Like IndexUnderMouse, but clamps to the ends instead of
+    /// returning -1 when the pointer is above/below the items.</summary>
+    private static int ClampedIndexAt(ListBox list, Point point)
+    {
+        if (list.Items.Count == 0)
+            return -1;
+
+        var hit = IndexUnderMouse(list, point);
+        if (hit >= 0)
+            return hit;
+
+        if (
+            list.ItemContainerGenerator.ContainerFromIndex(0) is ListBoxItem first
+            && point.Y < first.TranslatePoint(new Point(0, 0), list).Y
+        )
+            return 0;
+
+        return list.Items.Count - 1;
+    }
+
+    private static bool IsWithin<T>(object source)
+        where T : DependencyObject
     {
         var node = source as DependencyObject;
         while (node is Visual)
         {
-            if (node is TextBox)
+            if (node is T)
                 return true;
             node = VisualTreeHelper.GetParent(node);
         }
