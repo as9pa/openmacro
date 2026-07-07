@@ -212,6 +212,22 @@ public class MacroEngineTests
             }
         }
 
+        public void MouseDown(MouseButton button)
+        {
+            lock (gate)
+            {
+                calls.Add($"mdown:{button}");
+            }
+        }
+
+        public void MouseUp(MouseButton button)
+        {
+            lock (gate)
+            {
+                calls.Add($"mup:{button}");
+            }
+        }
+
         public void Text(string text)
         {
             lock (gate)

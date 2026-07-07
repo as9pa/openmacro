@@ -17,12 +17,48 @@ public sealed class HookService : IAsyncDisposable
     private readonly object gate = new();
 
     private SimpleGlobalHook? hook;
+    private GlobalHookType hookType;
     private MacroEngine? engine;
     private Action<KeyCode>? captureCallback;
+
+    // libuiohook has one process-wide run loop, so hooks must start and stop
+    // strictly one at a time. Dispose() only signals the loop to stop and
+    // returns before it has actually exited, so starting a replacement right
+    // away (e.g. switching to the mouse hook when recording begins) races the
+    // dying loop and its RunAsync returns at once, delivering nothing. hookOps
+    // serialises every stop/start off the callback thread (disposing from it
+    // deadlocks); hookLoop completes when the live hook's loop has fully exited.
+    private Task hookOps = Task.CompletedTask;
+    private Task hookLoop = Task.CompletedTask;
 
     public bool IsArmed => engine is not null;
 
     public bool IsRecording => recorder.IsRecording;
+
+    /// <summary>
+    /// Screen-pixel test for "is this point on our own window", set by the
+    /// UI. Clicks there while recording are operating the recorder (e.g.
+    /// pressing Stop), not part of the macro, so they are not captured.
+    /// Called on the hook thread — must not touch UI objects.
+    /// </summary>
+    public Func<short, short, bool>? IsOwnWindowPoint { get; set; }
+
+    /// <summary>
+    /// Plays a macro once, immediately — the "Run now" path. No hook or
+    /// arming involved: output is injected directly.
+    /// </summary>
+    public async Task RunMacroOnceAsync(Macro macro)
+    {
+        var oneShot = new MacroEngine(sink, []);
+        try
+        {
+            await oneShot.RunOnceAsync(macro);
+        }
+        finally
+        {
+            await oneShot.DisposeAsync();
+        }
+    }
 
     /// <summary>Arms the given bindings. Replaces any previously armed engine.</summary>
     public async Task ArmAsync(IEnumerable<Binding> bindings)
@@ -100,20 +136,72 @@ public sealed class HookService : IAsyncDisposable
     {
         var needed = engine is not null || recorder.IsRecording || captureCallback is not null;
 
-        if (needed && hook is null)
-        {
-            hook = new SimpleGlobalHook(GlobalHookType.Keyboard, runAsyncOnBackgroundThread: true);
-            hook.KeyPressed += OnKeyPressed;
-            hook.KeyReleased += OnKeyReleased;
-            _ = hook.RunAsync();
-        }
-        else if (!needed && hook is not null)
+        // Mouse events only matter while recording; the rest of the time the
+        // narrower keyboard-only hook keeps the trust story simple.
+        var neededType = recorder.IsRecording ? GlobalHookType.All : GlobalHookType.Keyboard;
+
+        if (hook is not null && (!needed || hookType != neededType))
         {
             var old = hook;
+            var oldLoop = hookLoop;
             hook = null;
-            // Never dispose the hook from its own callback thread — deadlock.
-            _ = Task.Run(old.Dispose);
+            // Stop, then block the chain until the old loop has really exited so
+            // the next hook can install cleanly.
+            hookOps = hookOps.ContinueWith(
+                _ =>
+                {
+                    old.Dispose();
+                    oldLoop.Wait();
+                },
+                TaskScheduler.Default
+            );
         }
+
+        if (needed && hook is null)
+        {
+            var next = new SimpleGlobalHook(neededType, runAsyncOnBackgroundThread: true);
+            next.KeyPressed += OnKeyPressed;
+            next.KeyReleased += OnKeyReleased;
+            next.MousePressed += OnMousePressed;
+            next.MouseReleased += OnMouseReleased;
+            hook = next;
+            hookType = neededType;
+
+            // Start only after any queued stop has finished, and expose the run
+            // loop's completion so a later replacement can wait on it here.
+            var loop = new TaskCompletionSource();
+            hookLoop = loop.Task;
+            hookOps = hookOps.ContinueWith(
+                _ =>
+                {
+                    _ = next.RunAsync()
+                        .ContinueWith(done => loop.TrySetResult(), TaskScheduler.Default);
+                },
+                TaskScheduler.Default
+            );
+        }
+    }
+
+    private void OnMousePressed(object? sender, MouseHookEventArgs e)
+    {
+        if (e.IsEventSimulated || !recorder.IsRecording)
+            return;
+
+        if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) == true)
+            return;
+
+        recorder.OnMouseDown(e.Data.Button);
+    }
+
+    private void OnMouseReleased(object? sender, MouseHookEventArgs e)
+    {
+        if (e.IsEventSimulated || !recorder.IsRecording)
+            return;
+
+        if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) == true)
+            return;
+
+        recorder.OnMouseUp(e.Data.Button);
     }
 
     private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
@@ -170,6 +258,8 @@ public sealed class HookService : IAsyncDisposable
     {
         MacroEngine? oldEngine;
         SimpleGlobalHook? oldHook;
+        Task ops,
+            loop;
         lock (gate)
         {
             captureCallback = null;
@@ -177,9 +267,15 @@ public sealed class HookService : IAsyncDisposable
             engine = null;
             oldHook = hook;
             hook = null;
+            ops = hookOps;
+            loop = hookLoop;
         }
 
+        // Let any queued start/stop settle before tearing the live hook down,
+        // then wait for its loop to exit so the process leaves no hook running.
+        await ops;
         oldHook?.Dispose();
+        await loop;
         if (oldEngine is not null)
             await oldEngine.DisposeAsync();
     }

@@ -9,6 +9,8 @@ namespace OpenMacro.Engine;
 [JsonPolymorphic(TypeDiscriminatorPropertyName = "type")]
 [JsonDerivedType(typeof(KeyDownEvent), "keyDown")]
 [JsonDerivedType(typeof(KeyUpEvent), "keyUp")]
+[JsonDerivedType(typeof(MouseDownEvent), "mouseDown")]
+[JsonDerivedType(typeof(MouseUpEvent), "mouseUp")]
 [JsonDerivedType(typeof(TextEvent), "text")]
 [JsonDerivedType(typeof(DelayEvent), "delay")]
 public abstract record MacroEvent;
@@ -16,6 +18,10 @@ public abstract record MacroEvent;
 public sealed record KeyDownEvent(KeyCode Key) : MacroEvent;
 
 public sealed record KeyUpEvent(KeyCode Key) : MacroEvent;
+
+public sealed record MouseDownEvent(MouseButton Button) : MacroEvent;
+
+public sealed record MouseUpEvent(MouseButton Button) : MacroEvent;
 
 public sealed record TextEvent(string Text) : MacroEvent;
 

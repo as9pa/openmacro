@@ -14,10 +14,10 @@ internal sealed class RowDragAdorner(UIElement adorned, ImageSource snapshot, Si
     : Adorner(adorned)
 {
     private static readonly Brush Backing = new SolidColorBrush(
-        Color.FromArgb(0xF2, 0xFF, 0xFF, 0xFF)
+        Color.FromArgb(0xF2, 0x2E, 0x2B, 0x29)
     );
     private static readonly Pen Outline = new(
-        new SolidColorBrush(Color.FromRgb(0xB5, 0xB5, 0xB5)),
+        new SolidColorBrush(Color.FromRgb(0x4C, 0x47, 0x41)),
         1
     );
 
