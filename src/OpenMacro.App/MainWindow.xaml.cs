@@ -52,22 +52,27 @@ public partial class MainWindow : Window
             EventsList,
             // Never start a drag from inside an inline editor.
             blocksDrag: Rows.IsWithin<TextBox>,
-            commit: (from, to) =>
+            commit: (sources, to) =>
             {
-                // The list already shows the final order; commit it to the model.
+                // The list already shows the final order; commit it to the
+                // model: pull the dragged steps out (sources are pre-drag
+                // indices, ascending) and reinsert them as one block.
                 ReplaceEvents(events =>
                 {
-                    var step = events[from];
-                    events.RemoveAt(from);
-                    events.Insert(to, step);
+                    var block = sources.Select(i => events[i]).ToList();
+                    for (var i = sources.Length - 1; i >= 0; i--)
+                        events.RemoveAt(sources[i]);
+                    events.InsertRange(to, block);
                 });
-                EventsList.SelectedIndex = to;
+                SelectEventRange(to, sources.Length);
             },
-            cancel: from =>
+            cancel: sources =>
             {
                 // Rebuild to restore the model's order and clear ghosting.
                 RefreshDetail();
-                EventsList.SelectedIndex = from;
+                foreach (var i in sources)
+                    if (i < EventsList.Items.Count)
+                        EventsList.SelectedItems.Add(EventsList.Items[i]);
             }
         );
 
@@ -75,18 +80,19 @@ public partial class MainWindow : Window
             BindingsList,
             // A press on the checkbox is a toggle, not a grab.
             blocksDrag: Rows.IsWithin<CheckBox>,
-            commit: (from, to) =>
+            // Single-select list: the block is always exactly one row.
+            commit: (sources, to) =>
             {
-                var moved = bindings[from];
-                bindings.RemoveAt(from);
+                var moved = bindings[sources[0]];
+                bindings.RemoveAt(sources[0]);
                 bindings.Insert(to, moved);
                 SaveAndRearm();
                 RefreshBindingsList(to);
                 RefreshDetail();
             },
-            cancel: from =>
+            cancel: sources =>
             {
-                RefreshBindingsList(from);
+                RefreshBindingsList(sources.Length > 0 ? sources[0] : -1);
                 RefreshDetail();
             }
         );
@@ -620,6 +626,19 @@ public partial class MainWindow : Window
 
     private void ReplaceSelectedStep(MacroEvent step) =>
         ReplaceEvents(events => events[EventsList.SelectedIndex] = step);
+
+    private void SelectEventRange(int start, int length)
+    {
+        if (length <= 1)
+        {
+            EventsList.SelectedIndex = start;
+            return;
+        }
+
+        EventsList.SelectedItems.Clear();
+        for (var i = start; i < start + length && i < EventsList.Items.Count; i++)
+            EventsList.SelectedItems.Add(EventsList.Items[i]);
+    }
 
     private List<int> SelectedEventIndices()
     {
