@@ -55,6 +55,7 @@ MacroEvent  ─┬─ KeyDown(key)        // press
              ├─ KeyUp(key)          // release
              ├─ Delay(ms)           // editable wait
              ├─ Text("gg ez")       // type a string
+             ├─ WaitForRelease      // pause until the trigger key is let go
              ├─ LaunchApp(path)
              └─ MouseClick(button)
 
@@ -158,6 +159,8 @@ All four correctness rules from above are in:
 - **Injected events dropped** — SharpHook 7 exposes this directly as `HookEventArgs.IsEventSimulated`; no feedback loops.
 - **Auto-repeat filtered** — the engine tracks real down/up, acts once per physical press (repeats are still suppressed so triggers don't leak).
 - **Nothing slow on the hook thread** — hook handlers only ask the engine "armed?" and signal it; playback runs on engine-owned tasks.
+
+**Press/release macros** (the AutoHotkey hold-transform pattern): a `WaitForRelease` timeline step pauses playback until the trigger key is physically released, splitting one macro into an on-press part and an on-release part — e.g. *press G → wait for keybind release → release G → tap E*. The engine parks the playback task on a `TaskCompletionSource` completed by the trigger's key-up (no polling); "Run now" skips the wait, and a hard stop while paused still releases everything held.
 
 **Stop semantics** (plan rule, now implemented): releasing a while-held trigger or toggling off finishes the cycle in progress, then stops. App exit hard-cancels mid-cycle — and either way any key the macro still holds is released. Timing currently uses coarse `Task.Delay`; the 1 ms precision scheduler from *Timing & precision* is deferred until the performance pass.
 

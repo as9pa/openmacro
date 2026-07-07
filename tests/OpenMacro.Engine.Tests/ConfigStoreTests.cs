@@ -24,6 +24,7 @@ public class ConfigStoreTests : IDisposable
                         new KeyDownEvent(KeyCode.VcLeftShift),
                         new TextEvent("hello"),
                         new DelayEvent(250),
+                        new WaitForReleaseEvent(),
                         new KeyUpEvent(KeyCode.VcLeftShift),
                     ]
                 ),

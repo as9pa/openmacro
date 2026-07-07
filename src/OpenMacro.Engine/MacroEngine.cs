@@ -76,6 +76,10 @@ public sealed class MacroEngine : IAsyncDisposable
         {
             state.TriggerIsDown = false;
 
+            // Wake a playback paused at a WaitForRelease step.
+            state.ReleaseWaiter?.TrySetResult();
+            state.ReleaseWaiter = null;
+
             if (state.Binding.Mode == PlaybackMode.WhileHeld)
                 state.StopRequested = true;
         }
@@ -103,7 +107,7 @@ public sealed class MacroEngine : IAsyncDisposable
         var held = new HeldInput();
         try
         {
-            await RunCycleAsync(macro, held);
+            await RunCycleAsync(macro, held, state: null);
         }
         catch (OperationCanceledException) { }
         finally
@@ -121,7 +125,7 @@ public sealed class MacroEngine : IAsyncDisposable
         {
             while (true)
             {
-                await RunCycleAsync(state.Binding.Macro, held);
+                await RunCycleAsync(state.Binding.Macro, held, state);
 
                 lock (state)
                 {
@@ -150,7 +154,9 @@ public sealed class MacroEngine : IAsyncDisposable
         }
     }
 
-    private async Task RunCycleAsync(Macro macro, HeldInput held)
+    // state is null when the macro runs without a trigger ("Run now") — then
+    // WaitForRelease steps have nothing to wait on and complete immediately.
+    private async Task RunCycleAsync(Macro macro, HeldInput held, BindingState? state)
     {
         foreach (var macroEvent in macro.Events)
         {
@@ -185,6 +191,29 @@ public sealed class MacroEngine : IAsyncDisposable
                 case DelayEvent e:
                     await Task.Delay(e.Milliseconds, hardStop.Token);
                     break;
+
+                case WaitForReleaseEvent:
+                {
+                    if (state is null)
+                        break;
+
+                    Task? released = null;
+                    lock (state)
+                    {
+                        if (state.TriggerIsDown)
+                        {
+                            // One waiter per pause; TriggerUp completes it.
+                            state.ReleaseWaiter ??= new(
+                                TaskCreationOptions.RunContinuationsAsynchronously
+                            );
+                            released = state.ReleaseWaiter.Task;
+                        }
+                    }
+
+                    if (released is not null)
+                        await released.WaitAsync(hardStop.Token);
+                    break;
+                }
             }
         }
     }
@@ -227,5 +256,9 @@ public sealed class MacroEngine : IAsyncDisposable
         public bool IsRunning;
         public int QueuedRuns;
         public Task? Playback;
+
+        // Set while playback is paused at a WaitForRelease step; completed
+        // (and cleared) by TriggerUp.
+        public TaskCompletionSource? ReleaseWaiter;
     }
 }
