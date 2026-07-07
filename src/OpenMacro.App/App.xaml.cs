@@ -45,7 +45,6 @@ public partial class App : Application
             // Mutate the existing brushes (they aren't frozen) so every
             // template and StaticResource reference picks up the new color.
             ((SolidColorBrush)Resources["AccentBrush"]).Color = accent;
-            ((SolidColorBrush)Resources["TextSelectionBrush"]).Color = accent;
             var field = (Color)Resources["FieldColor"];
             ((SolidColorBrush)Resources["AccentWashBrush"]).Color = Blend(field, accent, 0.28);
         }

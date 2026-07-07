@@ -133,6 +133,10 @@ public partial class MainWindow : Window
 
     // ---- arming ----
 
+    // Set when Enable is refused (nothing to arm) so the resulting Unchecked
+    // reports "no macros enabled" instead of "disabled".
+    private bool decliningEnable;
+
     private async void ArmToggle_Checked(object sender, RoutedEventArgs e)
     {
         if (trayArmItem is not null)
@@ -145,20 +149,40 @@ public partial class MainWindow : Window
         if (trayArmItem is not null)
             trayArmItem.IsChecked = false;
         await hooks.DisarmAsync();
-        Status("disabled — nothing is watching the keyboard");
+
+        if (decliningEnable)
+        {
+            decliningEnable = false;
+            Status("no macros enabled");
+        }
+        else
+        {
+            Status("disabled");
+        }
     }
 
-    private async Task RearmAsync()
-    {
-        // Only enabled bindings with a real trigger; first binding wins a
-        // duplicate trigger (possible via hand-edited config).
-        var armable = bindings
+    // Only enabled bindings with a real keybind; first binding wins a
+    // duplicate keybind (possible via hand-edited config).
+    private Binding[] Armable() =>
+        bindings
             .Where(b => b.Enabled && b.Trigger != KeyCode.VcUndefined)
             .DistinctBy(b => b.Trigger)
             .ToArray();
 
+    private async Task RearmAsync()
+    {
+        var armable = Armable();
+
+        // Nothing to arm: refuse the enable instead of arming an empty hook.
+        if (armable.Length == 0)
+        {
+            decliningEnable = true;
+            ArmToggle.IsChecked = false; // fires Unchecked → disarm + status
+            return;
+        }
+
         await hooks.ArmAsync(armable);
-        Status($"enabled — {armable.Length} macro(s) live");
+        Status($"enabled · {armable.Length} {(armable.Length == 1 ? "macro" : "macros")} live");
     }
 
     private void SaveAndRearm()
@@ -184,9 +208,8 @@ public partial class MainWindow : Window
         ConfigStore.Save(bindings);
         RefreshBindingsList(bindings.Count - 1);
         RefreshDetail();
-        NameBox.Focus();
-        NameBox.SelectAll();
-        Status("new macro — name it, set a trigger, add steps");
+        StartNameEdit();
+        Status("new macro");
     }
 
     // ---- trigger capture ----
@@ -198,7 +221,7 @@ public partial class MainWindow : Window
         if (Selected < 0)
             return;
 
-        Status("press a key for the trigger — Esc unassigns");
+        Status("press a key · Esc clears");
         hooks.CaptureNextKey(key => Dispatcher.Invoke(() => TriggerCaptured(key)));
     }
 
@@ -215,14 +238,14 @@ public partial class MainWindow : Window
             SaveAndRearm();
             RefreshBindingsList(i);
             RefreshDetail();
-            Status("trigger unassigned");
+            Status("keybind cleared");
             return;
         }
 
         var taken = bindings.Where((b, idx) => idx != i && b.Trigger == key).Any();
         if (taken)
         {
-            Status($"{KeyName(key)} is already a trigger for another binding");
+            Status($"{KeyName(key)} is already used by another macro");
             return;
         }
 
@@ -230,7 +253,7 @@ public partial class MainWindow : Window
         SaveAndRearm();
         RefreshBindingsList(i);
         RefreshDetail();
-        Status($"trigger set: {KeyName(key)}");
+        Status($"keybind set · {KeyName(key)}");
     }
 
     // ---- binding edits ----
@@ -244,15 +267,59 @@ public partial class MainWindow : Window
             RefreshDetail();
     }
 
-    private void NameBox_LostFocus(object sender, RoutedEventArgs e)
+    // ---- rename (the name heading edits in place on click) ----
+
+    private void NameText_Click(object sender, MouseButtonEventArgs e) => StartNameEdit();
+
+    private void StartNameEdit()
     {
-        var i = Selected;
-        if (refreshing || i < 0 || NameBox.Text == bindings[i].Macro.Name)
+        if (Selected < 0)
             return;
 
-        bindings[i] = bindings[i] with { Macro = bindings[i].Macro with { Name = NameBox.Text } };
+        NameEditBox.Text = bindings[Selected].Macro.Name;
+        NameText.Visibility = Visibility.Collapsed;
+        NameEditBox.Visibility = Visibility.Visible;
+        NameEditBox.Focus();
+        NameEditBox.SelectAll();
+    }
+
+    private void NameEdit_LostFocus(object sender, RoutedEventArgs e) => FinishNameEdit(true);
+
+    private void NameEdit_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+            FinishNameEdit(true);
+        else if (e.Key == Key.Escape)
+            FinishNameEdit(false);
+    }
+
+    private void FinishNameEdit(bool apply)
+    {
+        // Visibility doubles as the re-entry guard: committing on Enter
+        // collapses the box, which fires LostFocus right after.
+        if (NameEditBox.Visibility != Visibility.Visible)
+            return;
+
+        NameEditBox.Visibility = Visibility.Collapsed;
+        NameText.Visibility = Visibility.Visible;
+
+        var i = Selected;
+        var name = NameEditBox.Text.Trim();
+        if (!apply || i < 0 || name.Length == 0 || name == bindings[i].Macro.Name)
+            return;
+
+        bindings[i] = bindings[i] with { Macro = bindings[i].Macro with { Name = name } };
         SaveAndRearm();
         RefreshBindingsList(i);
+        RefreshDetail();
+    }
+
+    private void BindingsList_MouseDown(object sender, MouseButtonEventArgs e)
+    {
+        // A click on empty space (below the rows) deselects everything and
+        // returns to the opening page.
+        if (Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList)) < 0)
+            BindingsList.SelectedIndex = -1;
     }
 
     private void ModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -289,16 +356,7 @@ public partial class MainWindow : Window
         var menu = new ContextMenu();
         menu.Items.Add(MenuItemFor("Run now", RunSelectedBindingOnce));
         menu.Items.Add(new Separator());
-        menu.Items.Add(
-            MenuItemFor(
-                "Rename",
-                () =>
-                {
-                    NameBox.Focus();
-                    NameBox.SelectAll();
-                }
-            )
-        );
+        menu.Items.Add(MenuItemFor("Rename", StartNameEdit));
         menu.Items.Add(MenuItemFor("Change trigger…", BeginTriggerCapture));
         menu.Items.Add(MenuItemFor("Duplicate", DuplicateSelectedBinding));
         menu.Items.Add(MenuItemFor("Delete", DeleteSelectedBinding));
@@ -341,8 +399,8 @@ public partial class MainWindow : Window
         RefreshBindingsList(i);
         Status(
             bindings[i].Enabled
-                ? $"{bindings[i].Macro.Name}: enabled"
-                : $"{bindings[i].Macro.Name}: disabled"
+                ? $"{bindings[i].Macro.Name} enabled"
+                : $"{bindings[i].Macro.Name} disabled"
         );
     }
 
@@ -355,9 +413,9 @@ public partial class MainWindow : Window
         // Fires the macro immediately, without arming or touching the hook —
         // the fast way to test edits. Output goes wherever focus is.
         var binding = bindings[i];
-        Status($"running {binding.Macro.Name}…");
+        Status($"running {binding.Macro.Name}");
         await hooks.RunMacroOnceAsync(binding.Macro);
-        Status($"{binding.Macro.Name}: done");
+        Status("done");
     }
 
     private void DuplicateSelectedBinding()
@@ -379,7 +437,7 @@ public partial class MainWindow : Window
         ConfigStore.Save(bindings);
         RefreshBindingsList(i + 1);
         RefreshDetail();
-        Status("duplicated — set a trigger to arm the copy");
+        Status("duplicated");
     }
 
     private void DeleteSelectedBinding()
@@ -434,7 +492,7 @@ public partial class MainWindow : Window
             case Engine.KeyDownEvent
             or Engine.KeyUpEvent:
                 var isDown = SelectedEvent() is Engine.KeyDownEvent;
-                Status("press the new key for this step — Esc cancels");
+                Status("press a key · Esc cancels");
                 hooks.CaptureNextKey(key =>
                     Dispatcher.Invoke(() =>
                     {
@@ -452,7 +510,7 @@ public partial class MainWindow : Window
                                 ? new KeyDownEvent(key)
                                 : new KeyUpEvent(key)
                         );
-                        Status($"step now {(isDown ? "presses" : "releases")} {KeyName(key)}");
+                        Status("step updated");
                     })
                 );
                 break;
@@ -479,11 +537,13 @@ public partial class MainWindow : Window
         var box = new TextBox
         {
             Text = initial,
-            // Sits where the value was; negative margins absorb the box's own
-            // border+padding so the text doesn't jump when editing starts.
+            // Sits where the value was; the vertical margins absorb the box's
+            // own border+padding so the row height doesn't jump. No negative
+            // left margin — it would cover the opening quote of a text step —
+            // and a small right margin keeps the closing quote/unit clear.
             MinWidth = Math.Max(36, valueText.ActualWidth + 14),
             Padding = new Thickness(3, 0, 3, 0),
-            Margin = new Thickness(-4, -3, 0, -3),
+            Margin = new Thickness(0, -3, 3, -3),
             VerticalContentAlignment = VerticalAlignment.Center,
         };
 
@@ -517,7 +577,19 @@ public partial class MainWindow : Window
             else if (ke.Key == Key.Escape)
                 Finish(false);
         };
-        box.LostFocus += (_, _) => Finish(true);
+
+        // WPF raises double-click on the second mouse-DOWN; the second UP can
+        // then land outside this box (short values make it narrow) and yank
+        // focus the instant it opens. Treat focus loss in the first moments
+        // as that stray up-click and take focus back instead of committing.
+        var openedAt = Environment.TickCount64;
+        box.LostFocus += (_, _) =>
+        {
+            if (Environment.TickCount64 - openedAt < 300)
+                box.Focus();
+            else
+                Finish(true);
+        };
 
         box.SelectAll();
         box.Focus();
@@ -597,8 +669,12 @@ public partial class MainWindow : Window
     {
         var menu = new ContextMenu();
         menu.Items.Add(MenuItemFor("Insert key press", InsertKeyViaCapture));
-        menu.Items.Add(MenuItemFor("Insert delay", () => InsertThenEdit(new DelayEvent(100))));
-        menu.Items.Add(MenuItemFor("Insert text", () => InsertThenEdit(new TextEvent("text"))));
+        menu.Items.Add(
+            MenuItemFor("Insert delay", () => InsertThenEdit(new DelayEvent(100), atEnd: true))
+        );
+        menu.Items.Add(
+            MenuItemFor("Insert text", () => InsertThenEdit(new TextEvent("text"), atEnd: true))
+        );
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItemFor("Insert left click", () => InsertClick(MouseButton.Button1)));
         menu.Items.Add(MenuItemFor("Insert right click", () => InsertClick(MouseButton.Button2)));
@@ -607,9 +683,10 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Appends a step and immediately opens its value for editing.</summary>
-    private void InsertThenEdit(MacroEvent step)
+    private void InsertThenEdit(MacroEvent step, bool atEnd)
     {
-        EventsList.SelectedIndex = -1; // empty-space insert goes to the end
+        if (atEnd)
+            EventsList.SelectedIndex = -1; // empty-space insert goes to the end
         InsertEvents(step);
         // The new row's container doesn't exist until after layout.
         Dispatcher.InvokeAsync(
@@ -652,7 +729,7 @@ public partial class MainWindow : Window
     private void EventsList_KeyDown(object sender, KeyEventArgs e)
     {
         if (
-            e.Key == Key.Delete
+            e.Key is Key.Delete or Key.Back
             && EventsList.SelectedItems.Count > 0
             && Keyboard.FocusedElement is not TextBox
         )
@@ -676,14 +753,32 @@ public partial class MainWindow : Window
         EventsList.SelectedIndex = Math.Min(selected[0], EventsList.Items.Count - 1);
     }
 
-    private void AddKey_Click(object sender, RoutedEventArgs e) => InsertKeyViaCapture();
+    private void AddStep_Click(object sender, RoutedEventArgs e)
+    {
+        if (Selected < 0)
+            return;
+
+        var menu = new ContextMenu
+        {
+            PlacementTarget = AddStepButton,
+            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
+        };
+        menu.Items.Add(MenuItemFor("Add key press", InsertKeyViaCapture));
+        menu.Items.Add(
+            MenuItemFor("Add delay", () => InsertThenEdit(new DelayEvent(100), atEnd: false))
+        );
+        menu.Items.Add(
+            MenuItemFor("Add text", () => InsertThenEdit(new TextEvent("text"), atEnd: false))
+        );
+        menu.IsOpen = true;
+    }
 
     private void InsertKeyViaCapture()
     {
         if (Selected < 0)
             return;
 
-        Status("press the key to insert as press+release — Esc cancels");
+        Status("press a key · Esc cancels");
         hooks.CaptureNextKey(key =>
             Dispatcher.Invoke(() =>
             {
@@ -694,21 +789,9 @@ public partial class MainWindow : Window
                 }
 
                 InsertEvents(new KeyDownEvent(key), new DelayEvent(30), new KeyUpEvent(key));
-                Status($"inserted press + release of {KeyName(key)}");
+                Status($"added {KeyName(key)}");
             })
         );
-    }
-
-    private void AddDelay_Click(object sender, RoutedEventArgs e) =>
-        InsertEvents(new DelayEvent(100));
-
-    private void AddText_Click(object sender, RoutedEventArgs e)
-    {
-        if (Selected < 0 || AddTextBox.Text.Length == 0)
-            return;
-
-        InsertEvents(new TextEvent(AddTextBox.Text));
-        AddTextBox.Clear();
     }
 
     /// <summary>Inserts after the selected step, or at the end if none is selected.</summary>
@@ -740,14 +823,18 @@ public partial class MainWindow : Window
             recordTargetIndex = Selected;
             hooks.StartRecording();
             AppendRecordButton.Content = "Stop";
-            Status("recording steps into this macro — input passes through");
+            AppendRecordButton.Foreground = (Brush)FindResource("DangerBrush");
+            AppendRecordButton.BorderBrush = (Brush)FindResource("DangerBrush");
+            Status("recording macro");
             return;
         }
 
         var recorded = hooks.StopRecording("steps");
         var target = recordTargetIndex;
         recordTargetIndex = -1;
-        AppendRecordButton.Content = "Record steps";
+        AppendRecordButton.Content = "Record";
+        AppendRecordButton.ClearValue(ForegroundProperty);
+        AppendRecordButton.ClearValue(BorderBrushProperty);
 
         if (recorded.Events.Count == 0)
         {
@@ -756,7 +843,7 @@ public partial class MainWindow : Window
         }
 
         ReplaceEventsAt(target, events => events.AddRange(recorded.Events));
-        Status($"added {recorded.Events.Count} recorded steps");
+        Status($"added {recorded.Events.Count} steps");
     }
 
     private void MoveUp_Click(object sender, RoutedEventArgs e) => MoveEvent(-1);
@@ -987,8 +1074,10 @@ public partial class MainWindow : Window
         EmptyState.Visibility = Visibility.Collapsed;
 
         var b = bindings[i];
-        NameBox.Text = b.Macro.Name;
-        TriggerButton.Content = $"Trigger: {TriggerLabel(b)}";
+        NameText.Text = b.Macro.Name;
+        NameEditBox.Visibility = Visibility.Collapsed;
+        NameText.Visibility = Visibility.Visible;
+        TriggerButton.Content = TriggerLabel(b);
         ModeBox.SelectedIndex = (int)b.Mode;
 
         EventsList.Items.Clear();
@@ -1094,7 +1183,7 @@ public partial class MainWindow : Window
     }
 
     private static string TriggerLabel(Binding b) =>
-        b.Trigger == KeyCode.VcUndefined ? "not set" : KeyName(b.Trigger);
+        b.Trigger == KeyCode.VcUndefined ? "Not set" : KeyName(b.Trigger);
 
     private static string KeyName(KeyCode key) =>
         key.ToString().StartsWith("Vc") ? key.ToString()[2..] : key.ToString();

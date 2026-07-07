@@ -12,7 +12,7 @@
                 Padding="12,7">
             <DockPanel>
                 <ToggleButton x:Name="ArmToggle" DockPanel.Dock="Right"
-                              ToolTip="While on, enabled macros fire on their triggers"
+                              ToolTip="While on, enabled macros fire on their keybinds"
                               Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked">
                     <ToggleButton.Style>
                         <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
@@ -58,11 +58,12 @@
                 <DockPanel DockPanel.Dock="Top" Margin="14,10,10,6">
                     <Button DockPanel.Dock="Right" Content="+" Padding="8,0" FontSize="15"
                             ToolTip="New macro" Click="AddMacro_Click"/>
-                    <TextBlock Text="MACROS" Style="{StaticResource Eyebrow}"
+                    <TextBlock Text="Macros" Style="{StaticResource Eyebrow}"
                                VerticalAlignment="Center"/>
                 </DockPanel>
                 <ListBox x:Name="BindingsList"
                          SelectionChanged="BindingsList_SelectionChanged"
+                         PreviewMouseLeftButtonDown="BindingsList_MouseDown"
                          PreviewMouseRightButtonDown="BindingsList_RightClick"
                          MouseDoubleClick="BindingsList_MouseDoubleClick"
                          KeyDown="BindingsList_KeyDown"/>
@@ -83,38 +84,90 @@
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
 
-                <!-- name / trigger / mode -->
-                <Grid Grid.Row="0" Margin="0,0,0,14">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="*"/>
-                        <ColumnDefinition Width="Auto"/>
-                        <ColumnDefinition Width="Auto"/>
-                    </Grid.ColumnDefinitions>
-                    <TextBox x:Name="NameBox" VerticalContentAlignment="Center"
-                             LostFocus="NameBox_LostFocus"/>
-                    <Button x:Name="TriggerButton" Grid.Column="1" Margin="8,0,0,0"
-                            Click="TriggerButton_Click"/>
-                    <ComboBox x:Name="ModeBox" Grid.Column="2" Width="110" Margin="8,0,0,0"
-                              VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
-                        <ComboBoxItem Content="Once"/>
-                        <ComboBoxItem Content="While held"/>
-                        <ComboBoxItem Content="Toggle"/>
-                    </ComboBox>
-                </Grid>
+                <!-- name (click to rename) / keybind / mode -->
+                <DockPanel Grid.Row="0" Margin="0,0,0,14">
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                VerticalAlignment="Center">
+                        <TextBlock Text="Keybind" Foreground="{StaticResource InkMutedBrush}"
+                                   VerticalAlignment="Center"/>
+                        <Button x:Name="TriggerButton" Margin="6,0,0,0" MinWidth="64"
+                                ToolTip="Click, then press a key · Esc clears"
+                                Click="TriggerButton_Click"/>
+                        <TextBlock Text="Mode" Foreground="{StaticResource InkMutedBrush}"
+                                   Margin="14,0,0,0" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="ModeBox" Width="110" Margin="6,0,0,0"
+                                  VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
+                            <ComboBoxItem Content="Once"/>
+                            <ComboBoxItem Content="While held"/>
+                            <ComboBoxItem Content="Toggle"/>
+                        </ComboBox>
+                    </StackPanel>
+                    <!-- Generous transparent padding = a forgiving hover/click
+                         target around the title. The underline is a separate
+                         rectangle so it can fade in (TextDecorations can't). -->
+                    <Border x:Name="NameHover" Background="Transparent" Padding="8,4"
+                            Margin="-8,-4,0,-4" HorizontalAlignment="Left"
+                            VerticalAlignment="Center" Cursor="IBeam"
+                            ToolTip="Click to rename"
+                            MouseLeftButtonDown="NameText_Click">
+                        <Grid>
+                            <TextBlock x:Name="NameText" FontSize="19" FontWeight="SemiBold"/>
+                            <Rectangle Height="1.5" VerticalAlignment="Bottom" Margin="1,0,1,-2"
+                                       Fill="{StaticResource InkMutedBrush}">
+                                <Rectangle.Style>
+                                    <Style TargetType="Rectangle">
+                                        <Setter Property="Opacity" Value="0"/>
+                                        <Style.Triggers>
+                                            <DataTrigger Binding="{Binding IsMouseOver, ElementName=NameHover}"
+                                                         Value="True">
+                                                <DataTrigger.EnterActions>
+                                                    <BeginStoryboard>
+                                                        <Storyboard>
+                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                             To="1" Duration="0:0:0.15"/>
+                                                        </Storyboard>
+                                                    </BeginStoryboard>
+                                                </DataTrigger.EnterActions>
+                                                <DataTrigger.ExitActions>
+                                                    <BeginStoryboard>
+                                                        <Storyboard>
+                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                             To="0" Duration="0:0:0.20"/>
+                                                        </Storyboard>
+                                                    </BeginStoryboard>
+                                                </DataTrigger.ExitActions>
+                                            </DataTrigger>
+                                        </Style.Triggers>
+                                    </Style>
+                                </Rectangle.Style>
+                            </Rectangle>
+                            <TextBox x:Name="NameEditBox" Visibility="Collapsed"
+                                     Style="{StaticResource GhostTextBox}"
+                                     FontSize="19" FontWeight="SemiBold" MinWidth="60"
+                                     HorizontalAlignment="Left"
+                                     LostFocus="NameEdit_LostFocus" KeyDown="NameEdit_KeyDown"/>
+                        </Grid>
+                    </Border>
+                </DockPanel>
 
                 <!-- timeline header + step tools (new steps insert after the
                      selected step, or at the end when nothing is selected) -->
                 <DockPanel Grid.Row="1" Margin="0,0,0,8">
-                    <TextBlock Text="TIMELINE" Style="{StaticResource Eyebrow}"
+                    <TextBlock Text="Timeline" Style="{StaticResource Eyebrow}"
                                VerticalAlignment="Center"/>
-                    <Button x:Name="AppendRecordButton" Content="Record steps" Margin="10,0,0,0"
-                            Padding="8,3" Click="AppendRecord_Click"/>
                     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button Content="+ key" Padding="8,3" Click="AddKey_Click"/>
-                        <Button Content="+ delay" Margin="6,0,0,0" Padding="8,3" Click="AddDelay_Click"/>
-                        <TextBox x:Name="AddTextBox" Width="120" Margin="8,0,0,0" Padding="6,2"
-                                 VerticalContentAlignment="Center"/>
-                        <Button Content="+ text" Margin="4,0,0,0" Padding="8,3" Click="AddText_Click"/>
+                        <Button x:Name="AddStepButton" Padding="8,3" Click="AddStep_Click">
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="Add"/>
+                                <Path Data="M 0,0 L 3.5,4 L 7,0" Margin="6,1,0,0"
+                                      VerticalAlignment="Center"
+                                      Stroke="{StaticResource InkMutedBrush}" StrokeThickness="1.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                            </StackPanel>
+                        </Button>
+                        <Button x:Name="AppendRecordButton" Content="Record" Margin="6,0,0,0"
+                                Padding="8,3" ToolTip="Record input into this macro"
+                                Click="AppendRecord_Click"/>
                     </StackPanel>
                 </DockPanel>
 
