@@ -90,7 +90,11 @@
                                 VerticalAlignment="Center">
                         <TextBlock Text="Keybind" Foreground="{StaticResource InkMutedBrush}"
                                    VerticalAlignment="Center"/>
+                        <!-- Asymmetric padding: key names carry more leading than
+                             trailing side-bearing, so the ink sits right of true
+                             center — this nudges it back to optical center. -->
                         <Button x:Name="TriggerButton" Margin="6,0,0,0" MinWidth="64"
+                                Padding="11,5,13,5"
                                 ToolTip="Click, then press a key · Esc clears"
                                 Click="TriggerButton_Click"/>
                         <TextBlock Text="Mode" Foreground="{StaticResource InkMutedBrush}"
