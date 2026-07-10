@@ -650,8 +650,8 @@ public partial class MainWindow : Window
     );
 
     /// <summary>The filtered app's icon, from a currently running instance's
-    /// executable — null when it isn't running or refuses the query (e.g.
-    /// elevated processes).</summary>
+    /// executable — null only when it isn't running or no instance yields a
+    /// path (the limited query even works on anti-cheat-protected games).</summary>
     private static ImageSource? GetAppIcon(string processName)
     {
         if (appIconCache.TryGetValue(processName, out var cached))
@@ -660,28 +660,34 @@ public partial class MainWindow : Window
         var processes = System.Diagnostics.Process.GetProcessesByName(processName);
         try
         {
-            var path = processes.FirstOrDefault()?.MainModule?.FileName;
-            if (path is null)
-                return null;
+            foreach (var process in processes)
+            {
+                if (ForegroundApp.ExecutablePath(process.Id) is not { Length: > 0 } path)
+                    continue;
 
-            using var extracted = System.Drawing.Icon.ExtractAssociatedIcon(path);
-            if (extracted is null)
-                return null;
+                using var extracted = System.Drawing.Icon.ExtractAssociatedIcon(path);
+                if (extracted is null)
+                    continue;
 
-            var source = Imaging.CreateBitmapSourceFromHIcon(
-                extracted.Handle,
-                Int32Rect.Empty,
-                BitmapSizeOptions.FromWidthAndHeight(16, 16)
-            );
-            source.Freeze(); // usable from any thread, no live resource behind it
-            appIconCache[processName] = source;
-            return source;
+                var source = Imaging.CreateBitmapSourceFromHIcon(
+                    extracted.Handle,
+                    Int32Rect.Empty,
+                    BitmapSizeOptions.FromWidthAndHeight(16, 16)
+                );
+                source.Freeze(); // usable from any thread, no live resource behind it
+                appIconCache[processName] = source;
+                return source;
+            }
+
+            return null;
         }
         catch (Exception e)
             when (e
                     is System.ComponentModel.Win32Exception
                         or InvalidOperationException
                         or System.IO.FileNotFoundException
+                        // ExtractAssociatedIcon refuses UNC paths
+                        or ArgumentException
             )
         {
             return null;

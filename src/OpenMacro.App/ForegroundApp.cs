@@ -1,5 +1,6 @@
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace OpenMacro.App;
 
@@ -36,6 +37,47 @@ public static class ForegroundApp
         catch (ArgumentException)
         {
             return null; // the window's process exited under us
+        }
+    }
+
+    private const uint ProcessQueryLimitedInformation = 0x1000;
+
+    [DllImport("kernel32.dll", SetLastError = true)]
+    private static extern nint OpenProcess(uint access, bool inheritHandle, uint processId);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)]
+    private static extern bool QueryFullProcessImageName(
+        nint handle,
+        uint flags,
+        StringBuilder buffer,
+        ref uint size
+    );
+
+    [DllImport("kernel32.dll")]
+    private static extern bool CloseHandle(nint handle);
+
+    /// <summary>
+    /// Full path of a process's executable, or null. Process.MainModule needs
+    /// access rights that elevated and anti-cheat-protected processes (games!)
+    /// refuse; the limited-information query is built to still be answered.
+    /// </summary>
+    public static string? ExecutablePath(int processId)
+    {
+        var handle = OpenProcess(ProcessQueryLimitedInformation, false, (uint)processId);
+        if (handle == 0)
+            return null;
+
+        try
+        {
+            var buffer = new StringBuilder(1024);
+            var size = (uint)buffer.Capacity;
+            return QueryFullProcessImageName(handle, 0, buffer, ref size)
+                ? buffer.ToString()
+                : null;
+        }
+        finally
+        {
+            CloseHandle(handle);
         }
     }
 }
