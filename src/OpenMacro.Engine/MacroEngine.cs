@@ -56,7 +56,7 @@ public sealed class MacroEngine : IAsyncDisposable
 
                 case PlaybackMode.Toggle:
                     if (state.IsRunning)
-                        state.StopRequested = true;
+                        RequestStop(state);
                     else
                         EnsureRunning(state, repeat: true);
                     break;
@@ -81,10 +81,19 @@ public sealed class MacroEngine : IAsyncDisposable
             state.ReleaseWaiter = null;
 
             if (state.Binding.Mode == PlaybackMode.WhileHeld)
-                state.StopRequested = true;
+                RequestStop(state);
         }
 
         return true;
+    }
+
+    // Caller must hold the state lock. Waking the StopWaiter lets a playback
+    // parked at an infinite wait continue to its remaining (cleanup) steps.
+    private static void RequestStop(BindingState state)
+    {
+        state.StopRequested = true;
+        state.StopWaiter?.TrySetResult();
+        state.StopWaiter = null;
     }
 
     // Caller must hold the state lock.
@@ -184,13 +193,41 @@ public sealed class MacroEngine : IAsyncDisposable
                     held.Buttons.Remove(e.Button);
                     break;
 
+                case ScrollEvent e:
+                    sink.Scroll(e.Direction, e.Clicks);
+                    break;
+
                 case TextEvent e:
                     sink.Text(e.Text);
                     break;
 
-                case DelayEvent e:
+                case DelayEvent { Infinite: false } e:
                     await Task.Delay(e.Milliseconds, hardStop.Token);
                     break;
+
+                case DelayEvent: // infinite — park until asked to stop
+                {
+                    // Without a trigger ("Run now") nothing could ever stop
+                    // it, so it completes immediately, like WaitForRelease.
+                    if (state is null)
+                        break;
+
+                    Task? stopped = null;
+                    lock (state)
+                    {
+                        if (!state.StopRequested)
+                        {
+                            state.StopWaiter ??= new(
+                                TaskCreationOptions.RunContinuationsAsynchronously
+                            );
+                            stopped = state.StopWaiter.Task;
+                        }
+                    }
+
+                    if (stopped is not null)
+                        await stopped.WaitAsync(hardStop.Token);
+                    break;
+                }
 
                 case WaitForReleaseEvent:
                 {
@@ -260,5 +297,9 @@ public sealed class MacroEngine : IAsyncDisposable
         // Set while playback is paused at a WaitForRelease step; completed
         // (and cleared) by TriggerUp.
         public TaskCompletionSource? ReleaseWaiter;
+
+        // Set while playback is parked at an infinite wait; completed (and
+        // cleared) by RequestStop.
+        public TaskCompletionSource? StopWaiter;
     }
 }

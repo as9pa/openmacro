@@ -11,6 +11,7 @@ namespace OpenMacro.Engine;
 [JsonDerivedType(typeof(KeyUpEvent), "keyUp")]
 [JsonDerivedType(typeof(MouseDownEvent), "mouseDown")]
 [JsonDerivedType(typeof(MouseUpEvent), "mouseUp")]
+[JsonDerivedType(typeof(ScrollEvent), "scroll")]
 [JsonDerivedType(typeof(TextEvent), "text")]
 [JsonDerivedType(typeof(DelayEvent), "delay")]
 [JsonDerivedType(typeof(WaitForReleaseEvent), "waitForRelease")]
@@ -23,6 +24,27 @@ public sealed record KeyUpEvent(KeyCode Key) : MacroEvent;
 public sealed record MouseDownEvent(MouseButton Button) : MacroEvent;
 
 public sealed record MouseUpEvent(MouseButton Button) : MacroEvent;
+
+public enum ScrollDirection
+{
+    Up,
+    Down,
+}
+
+/// <summary>Turns the mouse wheel; one click is one wheel detent.</summary>
+public sealed record ScrollEvent : MacroEvent
+{
+    public ScrollDirection Direction { get; }
+
+    // Clamped like delays: at least one click.
+    public int Clicks { get; }
+
+    public ScrollEvent(ScrollDirection direction, int clicks = 1)
+    {
+        Direction = direction;
+        Clicks = Math.Max(1, clicks);
+    }
+}
 
 public sealed record TextEvent(string Text) : MacroEvent;
 
@@ -40,5 +62,18 @@ public sealed record DelayEvent : MacroEvent
     // Every delay is at least 1 ms (plan rule: clamp, don't reject).
     public int Milliseconds { get; }
 
-    public DelayEvent(int milliseconds) => Milliseconds = Math.Max(1, milliseconds);
+    /// <summary>
+    /// An infinite wait parks playback until the macro is asked to stop
+    /// (trigger released for While-held, pressed again for Toggle) — the
+    /// steps after it still run, so cleanup releases happen. In Once mode
+    /// only disabling macros ends it. "Run now" skips it.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingDefault)]
+    public bool Infinite { get; }
+
+    public DelayEvent(int milliseconds, bool infinite = false)
+    {
+        Milliseconds = Math.Max(1, milliseconds);
+        Infinite = infinite;
+    }
 }

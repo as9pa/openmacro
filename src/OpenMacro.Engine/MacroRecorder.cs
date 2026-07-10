@@ -37,6 +37,10 @@ public sealed class MacroRecorder(TimeProvider? time = null)
 
     public void OnMouseUp(MouseButton button) => Add(new MouseUpEvent(button));
 
+    // One event per hook notification: a long scroll records as several
+    // single-click steps, each editable afterwards.
+    public void OnScroll(ScrollDirection direction) => Add(new ScrollEvent(direction));
+
     private void Add(MacroEvent macroEvent)
     {
         if (!IsRecording)

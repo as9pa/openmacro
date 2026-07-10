@@ -33,6 +33,29 @@ public class MacroRecorderTests
     }
 
     [Fact]
+    public void RecordsScrollWithDirectionAndRealGapsAsDelays()
+    {
+        var time = new FakeTime();
+        var recorder = new MacroRecorder(time);
+
+        recorder.Start();
+        recorder.OnScroll(ScrollDirection.Up);
+        time.AdvanceMs(80);
+        recorder.OnScroll(ScrollDirection.Down);
+
+        var macro = recorder.Stop("test");
+
+        Assert.Equal(
+            [
+                new ScrollEvent(ScrollDirection.Up),
+                new DelayEvent(80),
+                new ScrollEvent(ScrollDirection.Down),
+            ],
+            macro.Events
+        );
+    }
+
+    [Fact]
     public void NoDelayBeforeTheFirstEvent()
     {
         var time = new FakeTime();
