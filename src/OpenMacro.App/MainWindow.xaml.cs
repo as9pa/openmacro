@@ -5,6 +5,8 @@ using System.Windows.Controls;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
+using System.Windows.Media.Animation;
+using System.Windows.Media.Effects;
 using Hardcodet.Wpf.TaskbarNotification;
 using OpenMacro.Engine;
 using SharpHook.Data;
@@ -109,6 +111,19 @@ public partial class MainWindow : Window
             return x >= r.Left && x <= r.Right && y >= r.Top && y <= r.Bottom;
         };
 
+        settings = SettingsStore.Load();
+        (armHotkeyKey, armHotkeyModifiers) = ParseHotkey(settings);
+        UpdateHotkeyButton();
+
+        statusFade.Tick += (_, _) =>
+        {
+            statusFade.Stop();
+            StatusText.BeginAnimation(
+                OpacityProperty,
+                new DoubleAnimation(0, TimeSpan.FromMilliseconds(400))
+            );
+        };
+
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
     }
@@ -162,12 +177,31 @@ public partial class MainWindow : Window
     }
 
     // Only enabled bindings with a real keybind; first binding wins a
-    // duplicate keybind (possible via hand-edited config).
+    // duplicate keybind (the UI enforces one enabled holder per key, but a
+    // hand-edited config can still enable two).
     private Binding[] Armable() =>
         bindings
             .Where(b => b.Enabled && b.Trigger != KeyCode.VcUndefined)
             .DistinctBy(b => b.Trigger)
             .ToArray();
+
+    /// <summary>
+    /// Index of the enabled binding (other than <paramref name="except"/>)
+    /// holding this trigger, or -1. Macros may share a keybind, but only one
+    /// holder can be enabled at a time — every path that enables a binding
+    /// checks this and makes you uncheck the current holder first.
+    /// </summary>
+    private int EnabledHolderOf(KeyCode trigger, int except)
+    {
+        if (trigger == KeyCode.VcUndefined)
+            return -1;
+
+        for (var i = 0; i < bindings.Count; i++)
+            if (i != except && bindings[i].Enabled && bindings[i].Trigger == trigger)
+                return i;
+
+        return -1;
+    }
 
     private async Task RearmAsync()
     {
@@ -212,6 +246,137 @@ public partial class MainWindow : Window
         Status("new macro");
     }
 
+    // ---- capture overlay ----
+
+    // True while the "press any key" overlay is up. Dismissal can race
+    // (scrim click vs. the hook callback), so both paths check-and-clear it.
+    private bool captureOverlayUp;
+
+    /// <summary>One-shot key capture fronted by the full-window overlay: the
+    /// shell blurs and an empty keycap breathes in the accent until the
+    /// captured key stamps it. Esc reaches <paramref name="onKey"/> like any
+    /// other key — each flow decides what it means. Clicking the scrim
+    /// cancels without a key. <paramref name="onKey"/> runs on the UI thread.
+    /// </summary>
+    private void CaptureKeyWithOverlay(string prompt, string hint, Action<KeyCode> onKey)
+    {
+        CapturePrompt.Text = prompt;
+        CaptureHint.Text = hint;
+        ShowCaptureOverlay();
+        hooks.CaptureNextKey(key =>
+            Dispatcher.Invoke(() =>
+            {
+                DismissCaptureOverlay(key == KeyCode.VcEscape ? null : KeyName(key));
+                onKey(key);
+            })
+        );
+    }
+
+    /// <summary>The "Add input" counterpart of <see cref="CaptureKeyWithOverlay"/>:
+    /// mouse buttons and wheel scrolls count as much as keys do. A click lands
+    /// here as the captured input (the hook suppresses it before WPF could see
+    /// it), so the scrim's click-to-cancel only applies to key-only captures.</summary>
+    private void CaptureInputWithOverlay(string prompt, string hint, Action<CapturedInput> onInput)
+    {
+        CapturePrompt.Text = prompt;
+        CaptureHint.Text = hint;
+        ShowCaptureOverlay();
+        hooks.CaptureNextInput(input =>
+            Dispatcher.Invoke(() =>
+            {
+                DismissCaptureOverlay(
+                    input switch
+                    {
+                        CapturedInput.Key { Code: KeyCode.VcEscape } => null,
+                        CapturedInput.Key k => KeyName(k.Code),
+                        CapturedInput.Mouse m => MouseName(m.Button),
+                        CapturedInput.Scroll s => ScrollName(s.Direction),
+                        _ => null,
+                    }
+                );
+                onInput(input);
+            })
+        );
+    }
+
+    private void CaptureOverlay_Click(object sender, MouseButtonEventArgs e)
+    {
+        hotkeyCapturing = false;
+        hooks.CancelCapture();
+        DismissCaptureOverlay(null);
+        Status("cancelled");
+    }
+
+    private void ShowCaptureOverlay()
+    {
+        captureOverlayUp = true;
+        CaptureKeyName.Text = "";
+
+        var blur = new BlurEffect { Radius = 0 };
+        Shell.Effect = blur;
+        blur.BeginAnimation(
+            BlurEffect.RadiusProperty,
+            new DoubleAnimation(10, TimeSpan.FromMilliseconds(180))
+        );
+        CaptureOverlay.Visibility = Visibility.Visible;
+        CaptureOverlay.BeginAnimation(
+            OpacityProperty,
+            new DoubleAnimation(1, TimeSpan.FromMilliseconds(150))
+        );
+
+        // The waiting LED: the empty keycap's border breathes toward the
+        // accent. Read the color off AccentBrush — it's retinted to the
+        // Windows accent at startup; the AccentColor resource is not.
+        CaptureKeycapStroke.BeginAnimation(SolidColorBrush.ColorProperty, null);
+        CaptureKeycapStroke.Color = (Color)FindResource("HairlineStrongColor");
+        CaptureKeycapStroke.BeginAnimation(
+            SolidColorBrush.ColorProperty,
+            new ColorAnimation(
+                ((SolidColorBrush)FindResource("AccentBrush")).Color,
+                TimeSpan.FromMilliseconds(1100)
+            )
+            {
+                AutoReverse = true,
+                RepeatBehavior = RepeatBehavior.Forever,
+            }
+        );
+    }
+
+    /// <summary>Fades the overlay out. With a <paramref name="keyName"/>, the
+    /// name stamps into the keycap and the border lights solid for a beat
+    /// first; null (Esc or scrim click) skips straight to the fade.</summary>
+    private async void DismissCaptureOverlay(string? keyName)
+    {
+        if (!captureOverlayUp)
+            return;
+        captureOverlayUp = false;
+
+        if (keyName is not null)
+        {
+            CaptureKeyName.Text = keyName;
+            CaptureKeycapStroke.BeginAnimation(SolidColorBrush.ColorProperty, null);
+            CaptureKeycapStroke.Color = ((SolidColorBrush)FindResource("AccentBrush")).Color;
+            await Task.Delay(320);
+            // A capture begun during the beat owns the overlay again.
+            if (captureOverlayUp)
+                return;
+        }
+
+        var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(180));
+        fade.Completed += (_, _) =>
+        {
+            if (captureOverlayUp)
+                return;
+            CaptureOverlay.Visibility = Visibility.Collapsed;
+            Shell.Effect = null;
+        };
+        CaptureOverlay.BeginAnimation(OpacityProperty, fade);
+        Shell.Effect?.BeginAnimation(
+            BlurEffect.RadiusProperty,
+            new DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
+        );
+    }
+
     // ---- trigger capture ----
 
     private void TriggerButton_Click(object sender, RoutedEventArgs e) => BeginTriggerCapture();
@@ -222,7 +387,11 @@ public partial class MainWindow : Window
             return;
 
         Status("press a key · Esc clears");
-        hooks.CaptureNextKey(key => Dispatcher.Invoke(() => TriggerCaptured(key)));
+        CaptureKeyWithOverlay(
+            "press a key to set the keybind",
+            "Esc clears the keybind",
+            TriggerCaptured
+        );
     }
 
     private void TriggerCaptured(KeyCode key)
@@ -242,18 +411,18 @@ public partial class MainWindow : Window
             return;
         }
 
-        var taken = bindings.Where((b, idx) => idx != i && b.Trigger == key).Any();
-        if (taken)
-        {
-            Status($"{KeyName(key)} is already used by another macro");
-            return;
-        }
-
-        bindings[i] = bindings[i] with { Trigger = key, Enabled = true };
+        // Sharing a keybind is fine, but if another holder is enabled this
+        // one starts unchecked — enabling it means unchecking that one first.
+        var holder = EnabledHolderOf(key, i);
+        bindings[i] = bindings[i] with { Trigger = key, Enabled = holder < 0 };
         SaveAndRearm();
         RefreshBindingsList(i);
         RefreshDetail();
-        Status($"keybind set · {KeyName(key)}");
+        Status(
+            holder < 0
+                ? $"keybind set · {KeyName(key)}"
+                : $"keybind set · uncheck {bindings[holder].Macro.Name} to enable this one"
+        );
     }
 
     // ---- binding edits ----
@@ -335,10 +504,26 @@ public partial class MainWindow : Window
 
     private void EnabledChanged(object sender, RoutedEventArgs e)
     {
-        if (refreshing || sender is not CheckBox { Tag: int i })
+        if (refreshing || sender is not CheckBox { Tag: int i } check)
             return;
 
-        bindings[i] = bindings[i] with { Enabled = ((CheckBox)sender).IsChecked == true };
+        var enable = check.IsChecked == true;
+
+        // Shared keybind: only one holder may be enabled — bounce the check
+        // back off and point at the one to uncheck first.
+        var holder = enable ? EnabledHolderOf(bindings[i].Trigger, i) : -1;
+        if (holder >= 0)
+        {
+            refreshing = true; // reverting the box is not a user edit
+            check.IsChecked = false;
+            refreshing = false;
+            Status(
+                $"uncheck {bindings[holder].Macro.Name} first — both use {KeyName(bindings[i].Trigger)}"
+            );
+            return;
+        }
+
+        bindings[i] = bindings[i] with { Enabled = enable };
         SaveAndRearm();
     }
 
@@ -394,7 +579,17 @@ public partial class MainWindow : Window
         if (i < 0)
             return;
 
-        bindings[i] = bindings[i] with { Enabled = !bindings[i].Enabled };
+        var enabling = !bindings[i].Enabled;
+        var holder = enabling ? EnabledHolderOf(bindings[i].Trigger, i) : -1;
+        if (holder >= 0)
+        {
+            Status(
+                $"uncheck {bindings[holder].Macro.Name} first — both use {KeyName(bindings[i].Trigger)}"
+            );
+            return;
+        }
+
+        bindings[i] = bindings[i] with { Enabled = enabling };
         SaveAndRearm();
         RefreshBindingsList(i);
         Status(
@@ -424,11 +619,10 @@ public partial class MainWindow : Window
         if (i < 0)
             return;
 
-        // The copy starts trigger-less and disabled so two bindings never
-        // contend for one key.
+        // The copy keeps the keybind (sharing is allowed) but starts
+        // unchecked — only one holder of a key may be enabled at a time.
         var copy = bindings[i] with
         {
-            Trigger = KeyCode.VcUndefined,
             Enabled = false,
             Macro = bindings[i].Macro with { Name = $"{bindings[i].Macro.Name} (copy)" },
         };
@@ -452,9 +646,9 @@ public partial class MainWindow : Window
         RefreshDetail();
     }
 
-    private static MenuItem MenuItemFor(string header, Action action)
+    private static MenuItem MenuItemFor(string header, Action action, string? toolTip = null)
     {
-        var item = new MenuItem { Header = header };
+        var item = new MenuItem { Header = header, ToolTip = toolTip };
         item.Click += (_, _) => action();
         return item;
     }
@@ -479,9 +673,30 @@ public partial class MainWindow : Window
         switch (SelectedEvent())
         {
             case DelayEvent d:
+                Status("milliseconds · type inf for infinite");
                 BeginInlineEdit(
-                    d.Milliseconds.ToString(),
-                    text => int.TryParse(text, out var ms) && ms >= 1 ? new DelayEvent(ms) : null
+                    d.Infinite ? "inf" : d.Milliseconds.ToString(),
+                    text =>
+                    {
+                        var t = text.Trim();
+                        if (
+                            t is "∞"
+                            || t.Equals("inf", StringComparison.OrdinalIgnoreCase)
+                            || t.Equals("infinite", StringComparison.OrdinalIgnoreCase)
+                        )
+                            return new DelayEvent(d.Milliseconds, infinite: true);
+                        return int.TryParse(t, out var ms) && ms >= 1 ? new DelayEvent(ms) : null;
+                    }
+                );
+                break;
+
+            case ScrollEvent s:
+                BeginInlineEdit(
+                    s.Clicks.ToString(),
+                    text =>
+                        int.TryParse(text, out var clicks) && clicks >= 1
+                            ? new ScrollEvent(s.Direction, clicks)
+                            : null
                 );
                 break;
 
@@ -493,8 +708,10 @@ public partial class MainWindow : Window
             or Engine.KeyUpEvent:
                 var isDown = SelectedEvent() is Engine.KeyDownEvent;
                 Status("press a key · Esc cancels");
-                hooks.CaptureNextKey(key =>
-                    Dispatcher.Invoke(() =>
+                CaptureKeyWithOverlay(
+                    "press a key to replace this step",
+                    "Esc cancels",
+                    key =>
                     {
                         if (key == KeyCode.VcEscape)
                         {
@@ -511,7 +728,7 @@ public partial class MainWindow : Window
                                 : new KeyUpEvent(key)
                         );
                         Status("step updated");
-                    })
+                    }
                 );
                 break;
         }
@@ -602,7 +819,7 @@ public partial class MainWindow : Window
         // Empty space is for inserting; rows are for editing.
         if (at < 0)
         {
-            EventsList.ContextMenu = BuildInsertMenu();
+            EventsList.ContextMenu = BuildStepMenu("Insert", atEnd: true);
             return;
         }
 
@@ -651,6 +868,35 @@ public partial class MainWindow : Window
                         )
                     );
                     break;
+                case ScrollEvent s:
+                    var flipped =
+                        s.Direction == ScrollDirection.Up
+                            ? ScrollDirection.Down
+                            : ScrollDirection.Up;
+                    menu.Items.Add(
+                        MenuItemFor(
+                            $"Make {ScrollName(flipped)}",
+                            () => ReplaceSelectedStep(new ScrollEvent(flipped, s.Clicks))
+                        )
+                    );
+                    break;
+                case DelayEvent d:
+                    menu.Items.Add(
+                        d.Infinite
+                            ? MenuItemFor(
+                                "Make timed",
+                                () => ReplaceSelectedStep(new DelayEvent(d.Milliseconds))
+                            )
+                            : MenuItemFor(
+                                "Make infinite",
+                                () =>
+                                    ReplaceSelectedStep(
+                                        new DelayEvent(d.Milliseconds, infinite: true)
+                                    ),
+                                "Waits until the macro is stopped — keybind released (While held) or pressed again (Toggle)"
+                            )
+                    );
+                    break;
             }
 
             menu.Items.Add(new Separator());
@@ -665,21 +911,53 @@ public partial class MainWindow : Window
         EventsList.ContextMenu = menu;
     }
 
-    private ContextMenu BuildInsertMenu()
+    /// <summary>The one step menu, shared by the Add button ("Add …", inserts
+    /// after the selected step) and the empty-space right-click ("Insert …",
+    /// appends at the end).</summary>
+    private ContextMenu BuildStepMenu(string verb, bool atEnd)
     {
         var menu = new ContextMenu();
-        menu.Items.Add(MenuItemFor("Insert key press", InsertKeyViaCapture));
         menu.Items.Add(
-            MenuItemFor("Insert delay", () => InsertThenEdit(new DelayEvent(100), atEnd: true))
+            MenuItemFor(
+                $"{verb} input",
+                () => InsertInputViaCapture(atEnd),
+                "Captures the next key, mouse button, or scroll"
+            )
         );
         menu.Items.Add(
-            MenuItemFor("Insert text", () => InsertThenEdit(new TextEvent("text"), atEnd: true))
+            MenuItemFor($"{verb} delay", () => InsertThenEdit(new DelayEvent(100), atEnd))
         );
-        menu.Items.Add(MenuItemFor("Insert wait for keybind release", InsertWaitForRelease));
+        menu.Items.Add(
+            MenuItemFor($"{verb} text", () => InsertThenEdit(new TextEvent("text"), atEnd))
+        );
+        menu.Items.Add(
+            MenuItemFor(
+                $"{verb} wait for keybind release",
+                () => Insert(atEnd, new WaitForReleaseEvent())
+            )
+        );
         menu.Items.Add(new Separator());
-        menu.Items.Add(MenuItemFor("Insert left click", () => InsertClick(MouseButton.Button1)));
-        menu.Items.Add(MenuItemFor("Insert right click", () => InsertClick(MouseButton.Button2)));
-        menu.Items.Add(MenuItemFor("Insert middle click", () => InsertClick(MouseButton.Button3)));
+
+        var mouse = new MenuItem { Header = $"{verb} mouse" };
+        mouse.Items.Add(MenuItemFor("Left click", () => InsertClick(MouseButton.Button1, atEnd)));
+        mouse.Items.Add(MenuItemFor("Right click", () => InsertClick(MouseButton.Button2, atEnd)));
+        mouse.Items.Add(
+            MenuItemFor("Middle click (wheel)", () => InsertClick(MouseButton.Button3, atEnd))
+        );
+        mouse.Items.Add(
+            MenuItemFor("Mouse 4 (back)", () => InsertClick(MouseButton.Button4, atEnd))
+        );
+        mouse.Items.Add(
+            MenuItemFor("Mouse 5 (forward)", () => InsertClick(MouseButton.Button5, atEnd))
+        );
+        mouse.Items.Add(new Separator());
+        mouse.Items.Add(
+            MenuItemFor("Scroll up", () => Insert(atEnd, new ScrollEvent(ScrollDirection.Up)))
+        );
+        mouse.Items.Add(
+            MenuItemFor("Scroll down", () => Insert(atEnd, new ScrollEvent(ScrollDirection.Down)))
+        );
+        menu.Items.Add(mouse);
         return menu;
     }
 
@@ -696,17 +974,17 @@ public partial class MainWindow : Window
         );
     }
 
-    private void InsertClick(MouseButton button)
+    /// <summary>Inserts after the selected step, or at the end when
+    /// <paramref name="atEnd"/> (the empty-space insert path).</summary>
+    private void Insert(bool atEnd, params MacroEvent[] steps)
     {
-        EventsList.SelectedIndex = -1;
-        InsertEvents(new MouseDownEvent(button), new DelayEvent(30), new MouseUpEvent(button));
+        if (atEnd)
+            EventsList.SelectedIndex = -1;
+        InsertEvents(steps);
     }
 
-    private void InsertWaitForRelease()
-    {
-        EventsList.SelectedIndex = -1; // empty-space insert goes to the end
-        InsertEvents(new WaitForReleaseEvent());
-    }
+    private void InsertClick(MouseButton button, bool atEnd) =>
+        Insert(atEnd, new MouseDownEvent(button), new DelayEvent(30), new MouseUpEvent(button));
 
     private void ReplaceSelectedStep(MacroEvent step) =>
         ReplaceEvents(events => events[EventsList.SelectedIndex] = step);
@@ -765,45 +1043,55 @@ public partial class MainWindow : Window
         if (Selected < 0)
             return;
 
-        var menu = new ContextMenu
-        {
-            PlacementTarget = AddStepButton,
-            Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom,
-        };
-        menu.Items.Add(MenuItemFor("Add key press", InsertKeyViaCapture));
-        menu.Items.Add(
-            MenuItemFor("Add delay", () => InsertThenEdit(new DelayEvent(100), atEnd: false))
-        );
-        menu.Items.Add(
-            MenuItemFor("Add text", () => InsertThenEdit(new TextEvent("text"), atEnd: false))
-        );
-        menu.Items.Add(
-            MenuItemFor(
-                "Add wait for keybind release",
-                () => InsertEvents(new WaitForReleaseEvent())
-            )
-        );
+        var menu = BuildStepMenu("Add", atEnd: false);
+        menu.PlacementTarget = AddStepButton;
+        menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         menu.IsOpen = true;
     }
 
-    private void InsertKeyViaCapture()
+    private void InsertInputViaCapture(bool atEnd)
     {
         if (Selected < 0)
             return;
 
-        Status("press a key · Esc cancels");
-        hooks.CaptureNextKey(key =>
-            Dispatcher.Invoke(() =>
+        Status("press a key, mouse button, or scroll · Esc cancels");
+        CaptureInputWithOverlay(
+            "press any input to add",
+            "keys, mouse buttons, and scrolling all count · Esc cancels",
+            input =>
             {
-                if (key == KeyCode.VcEscape)
+                switch (input)
                 {
-                    Status("cancelled");
-                    return;
-                }
+                    case CapturedInput.Key { Code: KeyCode.VcEscape }:
+                        Status("cancelled");
+                        break;
 
-                InsertEvents(new KeyDownEvent(key), new DelayEvent(30), new KeyUpEvent(key));
-                Status($"added {KeyName(key)}");
-            })
+                    case CapturedInput.Key k:
+                        Insert(
+                            atEnd,
+                            new KeyDownEvent(k.Code),
+                            new DelayEvent(30),
+                            new KeyUpEvent(k.Code)
+                        );
+                        Status($"added {KeyName(k.Code)}");
+                        break;
+
+                    case CapturedInput.Mouse m:
+                        Insert(
+                            atEnd,
+                            new MouseDownEvent(m.Button),
+                            new DelayEvent(30),
+                            new MouseUpEvent(m.Button)
+                        );
+                        Status($"added {MouseName(m.Button)}");
+                        break;
+
+                    case CapturedInput.Scroll s:
+                        Insert(atEnd, new ScrollEvent(s.Direction));
+                        Status($"added {ScrollName(s.Direction)}");
+                        break;
+                }
+            }
         );
     }
 
@@ -835,6 +1123,9 @@ public partial class MainWindow : Window
             // Remember the target now: selection may change while recording.
             recordTargetIndex = Selected;
             hooks.StartRecording();
+            // The click leaves keyboard focus on this button, and Space/Enter
+            // activate a focused button — recording a Space would press Stop.
+            Keyboard.ClearFocus();
             AppendRecordButton.Content = "Stop";
             AppendRecordButton.Foreground = (Brush)FindResource("DangerBrush");
             AppendRecordButton.BorderBrush = (Brush)FindResource("DangerBrush");
@@ -1136,11 +1427,21 @@ public partial class MainWindow : Window
             Engine.KeyUpEvent k => ("release", "", KeyName(k.Key), ""),
             MouseDownEvent m => ("press", "", MouseName(m.Button), ""),
             MouseUpEvent m => ("release", "", MouseName(m.Button), ""),
+            ScrollEvent s => (
+                "scroll",
+                s.Direction == ScrollDirection.Up ? "up × " : "down × ",
+                s.Clicks.ToString(),
+                ""
+            ),
+            DelayEvent { Infinite: true } => ("wait", "", "∞", ""),
             DelayEvent d => ("wait", "", d.Milliseconds.ToString(), " ms"),
             TextEvent t => ("type", "“", t.Text, "”"),
             WaitForReleaseEvent => ("wait", "", "until keybind released", ""),
             _ => ("?", "", e.ToString() ?? "", ""),
         };
+
+    private static string ScrollName(ScrollDirection direction) =>
+        direction == ScrollDirection.Up ? "scroll up" : "scroll down";
 
     private static string MouseName(MouseButton button) =>
         button switch
@@ -1153,10 +1454,23 @@ public partial class MainWindow : Window
             _ => button.ToString(),
         };
 
+    // Status messages are transient by design: each fades out after a few
+    // seconds instead of lingering as stale text. Live state doesn't need
+    // words — the dot and rule below keep showing armed/recording.
+    private readonly System.Windows.Threading.DispatcherTimer statusFade = new()
+    {
+        Interval = TimeSpan.FromSeconds(3),
+    };
+
     private void Status(string message)
     {
+        StatusText.BeginAnimation(OpacityProperty, null); // cancel a fade in flight
+        StatusText.Opacity = 1;
         StatusText.Text = message;
         UpdateLiveIndicators();
+
+        statusFade.Stop(); // restart the 3 s clock for this message
+        statusFade.Start();
     }
 
     /// <summary>The theme's "LED": the rule under the top bar and the status
@@ -1173,6 +1487,163 @@ public partial class MainWindow : Window
         LiveRule.Fill = rule is null ? Brushes.Transparent : (Brush)FindResource(rule);
     }
 
+    // ---- global Enable hotkey ----
+    // RegisterHotKey, not the global hook — the plan's "prefer the narrowest
+    // API" rule. The OS notifies us for exactly this one key, so it works
+    // while disarmed and from the tray without anything watching the
+    // keyboard. Trade-off: the chosen key is swallowed system-wide the whole
+    // time the app runs, so bare letter keys make poor choices — F-keys or a
+    // modifier combo are the sane picks.
+
+    private AppSettings settings = new();
+    private Key armHotkeyKey = Key.None;
+    private ModifierKeys armHotkeyModifiers = ModifierKeys.None;
+    private bool hotkeyCapturing;
+    private nint windowHandle;
+
+    private const int ArmHotkeyId = 1;
+    private const int WmHotkey = 0x0312;
+
+    [DllImport("user32.dll")]
+    private static extern bool RegisterHotKey(nint hwnd, int id, uint modifiers, uint vk);
+
+    [DllImport("user32.dll")]
+    private static extern bool UnregisterHotKey(nint hwnd, int id);
+
+    private static (Key, ModifierKeys) ParseHotkey(AppSettings s)
+    {
+        Enum.TryParse(s.ArmHotkeyKey, out Key key);
+        Enum.TryParse(s.ArmHotkeyModifiers, out ModifierKeys modifiers);
+        return (key, modifiers);
+    }
+
+    private void HotkeyButton_Click(object sender, RoutedEventArgs e)
+    {
+        // The hotkey is captured at the WPF level (the window has focus right
+        // now), not via the global hook — no KeyCode→virtual-key mapping, and
+        // no hook while disarmed.
+        CapturePrompt.Text = "press a key to toggle Enable globally";
+        CaptureHint.Text = "modifiers count (e.g. Ctrl+F6) · Esc clears · click to cancel";
+        hotkeyCapturing = true;
+        ShowCaptureOverlay();
+        Status("press a key for the Enable hotkey · Esc clears");
+    }
+
+    private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        if (!hotkeyCapturing)
+            return;
+
+        // Alt-combinations arrive as Key.System with the real key tucked away.
+        var key = e.Key == Key.System ? e.SystemKey : e.Key;
+        if (
+            key
+            is Key.LeftCtrl
+                or Key.RightCtrl
+                or Key.LeftShift
+                or Key.RightShift
+                or Key.LeftAlt
+                or Key.RightAlt
+                or Key.LWin
+                or Key.RWin
+        )
+            return; // modifiers ride along with the next real key
+
+        e.Handled = true;
+        hotkeyCapturing = false;
+
+        if (key == Key.Escape)
+        {
+            DismissCaptureOverlay(null);
+            ApplyArmHotkey(Key.None, ModifierKeys.None);
+            Status("hotkey cleared");
+            return;
+        }
+
+        DismissCaptureOverlay(HotkeyLabel(key, Keyboard.Modifiers));
+        ApplyArmHotkey(key, Keyboard.Modifiers);
+    }
+
+    private void ApplyArmHotkey(Key key, ModifierKeys modifiers)
+    {
+        if (windowHandle != 0)
+            UnregisterHotKey(windowHandle, ArmHotkeyId);
+
+        armHotkeyKey = key;
+        armHotkeyModifiers = modifiers;
+
+        if (key != Key.None)
+        {
+            if (TryRegisterArmHotkey())
+            {
+                Status($"Enable hotkey set · {HotkeyLabel(key, modifiers)}");
+            }
+            else
+            {
+                Status($"couldn't register {HotkeyLabel(key, modifiers)} — another app may own it");
+                armHotkeyKey = Key.None;
+                armHotkeyModifiers = ModifierKeys.None;
+            }
+        }
+
+        settings = settings with
+        {
+            ArmHotkeyKey = armHotkeyKey == Key.None ? null : armHotkeyKey.ToString(),
+            ArmHotkeyModifiers =
+                armHotkeyModifiers == ModifierKeys.None ? null : armHotkeyModifiers.ToString(),
+        };
+        SettingsStore.Save(settings);
+        UpdateHotkeyButton();
+    }
+
+    private bool TryRegisterArmHotkey() =>
+        windowHandle != 0
+        && armHotkeyKey != Key.None
+        && RegisterHotKey(
+            windowHandle,
+            ArmHotkeyId,
+            ToNativeModifiers(armHotkeyModifiers),
+            (uint)KeyInterop.VirtualKeyFromKey(armHotkeyKey)
+        );
+
+    // MOD_NOREPEAT is always on: holding the hotkey shouldn't strobe Enable.
+    private static uint ToNativeModifiers(ModifierKeys modifiers) =>
+        0x4000u // MOD_NOREPEAT
+        | (modifiers.HasFlag(ModifierKeys.Alt) ? 0x1u : 0)
+        | (modifiers.HasFlag(ModifierKeys.Control) ? 0x2u : 0)
+        | (modifiers.HasFlag(ModifierKeys.Shift) ? 0x4u : 0)
+        | (modifiers.HasFlag(ModifierKeys.Windows) ? 0x8u : 0);
+
+    private static string HotkeyLabel(Key key, ModifierKeys modifiers)
+    {
+        var parts = new List<string>(4);
+        if (modifiers.HasFlag(ModifierKeys.Control))
+            parts.Add("Ctrl");
+        if (modifiers.HasFlag(ModifierKeys.Alt))
+            parts.Add("Alt");
+        if (modifiers.HasFlag(ModifierKeys.Shift))
+            parts.Add("Shift");
+        if (modifiers.HasFlag(ModifierKeys.Windows))
+            parts.Add("Win");
+        parts.Add(key.ToString());
+        return string.Join("+", parts);
+    }
+
+    private void UpdateHotkeyButton() =>
+        HotkeyButton.Content =
+            armHotkeyKey == Key.None ? "Set hotkey" : HotkeyLabel(armHotkeyKey, armHotkeyModifiers);
+
+    private nint HotkeyWndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
+    {
+        if (msg == WmHotkey && wParam == ArmHotkeyId)
+        {
+            ArmToggle.IsChecked = ArmToggle.IsChecked != true;
+            handled = true;
+        }
+
+        return 0;
+    }
+
     // ---- dark title bar ----
 
     [DllImport("dwmapi.dll")]
@@ -1187,9 +1658,24 @@ public partial class MainWindow : Window
     {
         base.OnSourceInitialized(e);
 
+        var hwnd = new WindowInteropHelper(this).Handle;
+
+        // The HWND exists now: install the WM_HOTKEY listener and claim any
+        // saved Enable hotkey.
+        windowHandle = hwnd;
+        HwndSource.FromHwnd(hwnd)!.AddHook(HotkeyWndProc);
+        if (armHotkeyKey != Key.None && !TryRegisterArmHotkey())
+        {
+            Status(
+                $"couldn't register {HotkeyLabel(armHotkeyKey, armHotkeyModifiers)} — another app may own it"
+            );
+            armHotkeyKey = Key.None;
+            armHotkeyModifiers = ModifierKeys.None;
+            UpdateHotkeyButton();
+        }
+
         // Ask DWM for a dark caption and paint it to match the top bar; both
         // are best-effort (older Windows just keeps the default title bar).
-        var hwnd = new WindowInteropHelper(this).Handle;
         var dark = 1;
         _ = DwmSetWindowAttribute(hwnd, 20, ref dark, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE
         var caption = 0x00202123; // COLORREF (0x00BBGGRR) of the Bg token #232120
@@ -1215,6 +1701,8 @@ public partial class MainWindow : Window
     {
         // Uninstall the hook and hard-stop playback (releases held keys).
         // Blocking briefly here is fine — the window is closing.
+        if (windowHandle != 0)
+            UnregisterHotKey(windowHandle, ArmHotkeyId);
         tray?.Dispose();
         hooks.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
         base.OnClosing(e);

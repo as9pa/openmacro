@@ -51,6 +51,46 @@ public class ConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void RoundTripsScrollAndInfiniteDelay()
+    {
+        Binding[] bindings =
+        [
+            new(
+                KeyCode.VcCapsLock,
+                new Macro(
+                    "wheel-and-park",
+                    [
+                        new ScrollEvent(ScrollDirection.Down, 3),
+                        new DelayEvent(500, infinite: true),
+                        new DelayEvent(500),
+                    ]
+                ),
+                PlaybackMode.WhileHeld
+            ),
+        ];
+
+        ConfigStore.Save(bindings, path);
+        var loaded = ConfigStore.Load(path);
+
+        Assert.NotNull(loaded);
+        var events = loaded[0].Macro.Events;
+        Assert.Equal(bindings[0].Macro.Events, events);
+
+        var scroll = Assert.IsType<ScrollEvent>(events[0]);
+        Assert.Equal(ScrollDirection.Down, scroll.Direction);
+        Assert.Equal(3, scroll.Clicks);
+
+        var infinite = Assert.IsType<DelayEvent>(events[1]);
+        Assert.Equal(500, infinite.Milliseconds);
+        Assert.True(infinite.Infinite);
+
+        // An old-style plain delay omits Infinite from JSON, so it must load
+        // back as non-infinite.
+        var plain = Assert.IsType<DelayEvent>(events[2]);
+        Assert.False(plain.Infinite);
+    }
+
+    [Fact]
     public void SavedFileUsesReadableNames()
     {
         ConfigStore.Save(

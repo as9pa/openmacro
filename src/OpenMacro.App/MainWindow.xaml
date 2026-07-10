@@ -4,190 +4,235 @@
         Title="openmacro" Height="560" Width="920" MinHeight="400" MinWidth="700"
         Background="{StaticResource BgBrush}" Foreground="{StaticResource InkBrush}"
         FontFamily="{StaticResource UiFont}" FontSize="13"
-        TextOptions.TextFormattingMode="Display">
-    <DockPanel>
-        <!-- Bottom bar: status + master enable -->
-        <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}"
-                BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0"
-                Padding="12,7">
-            <DockPanel>
-                <ToggleButton x:Name="ArmToggle" DockPanel.Dock="Right"
-                              ToolTip="While on, enabled macros fire on their keybinds"
-                              Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked">
-                    <ToggleButton.Style>
-                        <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
-                            <Setter Property="Content" Value="Enable"/>
-                            <Style.Triggers>
-                                <Trigger Property="IsChecked" Value="True">
-                                    <Setter Property="Content" Value="Disable"/>
-                                </Trigger>
-                            </Style.Triggers>
-                        </Style>
-                    </ToggleButton.Style>
-                </ToggleButton>
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
-                    <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="2,1,8,0"
-                             VerticalAlignment="Center" Fill="{StaticResource InkFaintBrush}"/>
-                    <TextBlock x:Name="StatusText" Text="idle"
-                               Foreground="{StaticResource InkMutedBrush}"
-                               VerticalAlignment="Center"/>
-                </StackPanel>
-            </DockPanel>
-        </Border>
-
-        <!-- The LED: lit in the accent color while macros are live, red while
-             recording, off when idle. Always present so toggling never shifts
-             the layout. -->
-        <Rectangle x:Name="LiveRule" DockPanel.Dock="Bottom" Height="2" Fill="Transparent"/>
-
-        <!-- Visual keyboard. Hidden for now (assignment happens via capture);
-             the control and its code stay for a later revisit. -->
-        <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" Visibility="Collapsed"
-                BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0">
-            <Expander Header="Keyboard" IsExpanded="True" Padding="4,4,4,8">
-                <StackPanel x:Name="KeyboardHost" HorizontalAlignment="Center" Margin="0,4,0,0"/>
-            </Expander>
-        </Border>
-
-        <!-- Left: macros (drag reorders live — wired in code by ListReorder;
-             right-click for run/rename/trigger/etc., Delete key deletes,
-             double-click toggles enabled) -->
-        <Border DockPanel.Dock="Left" Width="300" Background="{StaticResource SurfaceBrush}"
-                BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,1,0">
-            <DockPanel>
-                <DockPanel DockPanel.Dock="Top" Margin="14,10,10,6">
-                    <Button DockPanel.Dock="Right" Content="+" Padding="8,0" FontSize="15"
-                            ToolTip="New macro" Click="AddMacro_Click"/>
-                    <TextBlock Text="Macros" Style="{StaticResource Eyebrow}"
-                               VerticalAlignment="Center"/>
-                </DockPanel>
-                <ListBox x:Name="BindingsList"
-                         SelectionChanged="BindingsList_SelectionChanged"
-                         PreviewMouseLeftButtonDown="BindingsList_MouseDown"
-                         PreviewMouseRightButtonDown="BindingsList_RightClick"
-                         MouseDoubleClick="BindingsList_MouseDoubleClick"
-                         KeyDown="BindingsList_KeyDown"/>
-            </DockPanel>
-        </Border>
-
-        <!-- Right: selected macro detail -->
-        <Grid>
-            <TextBlock x:Name="EmptyState" Foreground="{StaticResource InkFaintBrush}"
-                       TextAlignment="Center" LineHeight="22"
-                       HorizontalAlignment="Center" VerticalAlignment="Center"
-                       Text="Select a macro, or press + to create one."/>
-
-            <Grid x:Name="DetailPanel" Margin="18,14,18,14" Visibility="Collapsed">
-                <Grid.RowDefinitions>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="Auto"/>
-                    <RowDefinition Height="*"/>
-                </Grid.RowDefinitions>
-
-                <!-- name (click to rename) / keybind / mode -->
-                <DockPanel Grid.Row="0" Margin="0,0,0,14">
-                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
-                                VerticalAlignment="Center">
-                        <TextBlock Text="Keybind" Foreground="{StaticResource InkMutedBrush}"
+        TextOptions.TextFormattingMode="Display"
+        PreviewKeyDown="Window_PreviewKeyDown">
+    <Grid>
+        <!-- Everything but the capture overlay lives in the shell, so key
+             capture can blur it as one piece. -->
+        <DockPanel x:Name="Shell">
+            <!-- Bottom bar: status + master enable -->
+            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}"
+                    BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0"
+                    Padding="12,7">
+                <DockPanel>
+                    <ToggleButton x:Name="ArmToggle" DockPanel.Dock="Right"
+                                  ToolTip="While on, enabled macros fire on their keybinds"
+                                  Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked">
+                        <ToggleButton.Style>
+                            <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
+                                <Setter Property="Content" Value="Enable"/>
+                                <Style.Triggers>
+                                    <Trigger Property="IsChecked" Value="True">
+                                        <Setter Property="Content" Value="Disable"/>
+                                    </Trigger>
+                                </Style.Triggers>
+                            </Style>
+                        </ToggleButton.Style>
+                    </ToggleButton>
+                    <!-- Global hotkey that flips Enable. RegisterHotKey-based
+                         (see code-behind), so it works from the tray without
+                         the global hook existing while disarmed. -->
+                    <Button x:Name="HotkeyButton" DockPanel.Dock="Right" Margin="0,0,10,0"
+                            Padding="8,3" Foreground="{StaticResource InkMutedBrush}"
+                            ToolTip="Global hotkey that toggles Enable — works while the app is in the tray · click, then press a key · Esc clears"
+                            Click="HotkeyButton_Click"/>
+                    <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                        <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="2,1,8,0"
+                                 VerticalAlignment="Center" Fill="{StaticResource InkFaintBrush}"/>
+                        <!-- Blank until something happens; messages fade out
+                             after 3 s (see Status in code-behind). -->
+                        <TextBlock x:Name="StatusText"
+                                   Foreground="{StaticResource InkMutedBrush}"
                                    VerticalAlignment="Center"/>
-                        <!-- Asymmetric padding: key names carry more leading than
-                             trailing side-bearing, so the ink sits right of true
-                             center — this nudges it back to optical center. -->
-                        <Button x:Name="TriggerButton" Margin="6,0,0,0" MinWidth="64"
-                                Padding="11,5,13,5"
-                                ToolTip="Click, then press a key · Esc clears"
-                                Click="TriggerButton_Click"/>
-                        <TextBlock Text="Mode" Foreground="{StaticResource InkMutedBrush}"
-                                   Margin="14,0,0,0" VerticalAlignment="Center"/>
-                        <ComboBox x:Name="ModeBox" Width="110" Margin="6,0,0,0"
-                                  VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
-                            <ComboBoxItem Content="Once"/>
-                            <ComboBoxItem Content="While held"/>
-                            <ComboBoxItem Content="Toggle"/>
-                        </ComboBox>
                     </StackPanel>
-                    <!-- Generous transparent padding = a forgiving hover/click
-                         target around the title. The underline is a separate
-                         rectangle so it can fade in (TextDecorations can't). -->
-                    <Border x:Name="NameHover" Background="Transparent" Padding="8,4"
-                            Margin="-8,-4,0,-4" HorizontalAlignment="Left"
-                            VerticalAlignment="Center" Cursor="IBeam"
-                            ToolTip="Click to rename"
-                            MouseLeftButtonDown="NameText_Click">
-                        <Grid>
-                            <TextBlock x:Name="NameText" FontSize="19" FontWeight="SemiBold"/>
-                            <Rectangle Height="1.5" VerticalAlignment="Bottom" Margin="1,0,1,-2"
-                                       Fill="{StaticResource InkMutedBrush}">
-                                <Rectangle.Style>
-                                    <Style TargetType="Rectangle">
-                                        <Setter Property="Opacity" Value="0"/>
-                                        <Style.Triggers>
-                                            <DataTrigger Binding="{Binding IsMouseOver, ElementName=NameHover}"
-                                                         Value="True">
-                                                <DataTrigger.EnterActions>
-                                                    <BeginStoryboard>
-                                                        <Storyboard>
-                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                             To="1" Duration="0:0:0.15"/>
-                                                        </Storyboard>
-                                                    </BeginStoryboard>
-                                                </DataTrigger.EnterActions>
-                                                <DataTrigger.ExitActions>
-                                                    <BeginStoryboard>
-                                                        <Storyboard>
-                                                            <DoubleAnimation Storyboard.TargetProperty="Opacity"
-                                                                             To="0" Duration="0:0:0.20"/>
-                                                        </Storyboard>
-                                                    </BeginStoryboard>
-                                                </DataTrigger.ExitActions>
-                                            </DataTrigger>
-                                        </Style.Triggers>
-                                    </Style>
-                                </Rectangle.Style>
-                            </Rectangle>
-                            <TextBox x:Name="NameEditBox" Visibility="Collapsed"
-                                     Style="{StaticResource GhostTextBox}"
-                                     FontSize="19" FontWeight="SemiBold" MinWidth="60"
-                                     HorizontalAlignment="Left"
-                                     LostFocus="NameEdit_LostFocus" KeyDown="NameEdit_KeyDown"/>
-                        </Grid>
+                </DockPanel>
+            </Border>
+
+            <!-- The LED: lit in the accent color while macros are live, red while
+                 recording, off when idle. Always present so toggling never shifts
+                 the layout. -->
+            <Rectangle x:Name="LiveRule" DockPanel.Dock="Bottom" Height="2" Fill="Transparent"/>
+
+            <!-- Visual keyboard. Hidden for now (assignment happens via capture);
+                 the control and its code stay for a later revisit. -->
+            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" Visibility="Collapsed"
+                    BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0">
+                <Expander Header="Keyboard" IsExpanded="True" Padding="4,4,4,8">
+                    <StackPanel x:Name="KeyboardHost" HorizontalAlignment="Center" Margin="0,4,0,0"/>
+                </Expander>
+            </Border>
+
+            <!-- Left: macros (drag reorders live — wired in code by ListReorder;
+                 right-click for run/rename/trigger/etc., Delete key deletes,
+                 double-click toggles enabled) -->
+            <Border DockPanel.Dock="Left" Width="300" Background="{StaticResource SurfaceBrush}"
+                    BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,1,0">
+                <DockPanel>
+                    <DockPanel DockPanel.Dock="Top" Margin="14,10,10,6">
+                        <Button DockPanel.Dock="Right" Content="+" Padding="8,0" FontSize="15"
+                                ToolTip="New macro" Click="AddMacro_Click"/>
+                        <TextBlock Text="Macros" Style="{StaticResource Eyebrow}"
+                                   VerticalAlignment="Center"/>
+                    </DockPanel>
+                    <ListBox x:Name="BindingsList"
+                             SelectionChanged="BindingsList_SelectionChanged"
+                             PreviewMouseLeftButtonDown="BindingsList_MouseDown"
+                             PreviewMouseRightButtonDown="BindingsList_RightClick"
+                             MouseDoubleClick="BindingsList_MouseDoubleClick"
+                             KeyDown="BindingsList_KeyDown"/>
+                </DockPanel>
+            </Border>
+
+            <!-- Right: selected macro detail -->
+            <Grid>
+                <TextBlock x:Name="EmptyState" Foreground="{StaticResource InkFaintBrush}"
+                           TextAlignment="Center" LineHeight="22"
+                           HorizontalAlignment="Center" VerticalAlignment="Center"
+                           Text="Select a macro, or press + to create one."/>
+
+                <Grid x:Name="DetailPanel" Margin="18,14,18,14" Visibility="Collapsed">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="*"/>
+                    </Grid.RowDefinitions>
+
+                    <!-- name (click to rename) / keybind / mode -->
+                    <DockPanel Grid.Row="0" Margin="0,0,0,14">
+                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                    VerticalAlignment="Center">
+                            <TextBlock Text="Keybind" Foreground="{StaticResource InkMutedBrush}"
+                                       VerticalAlignment="Center"/>
+                            <!-- Asymmetric padding: key names carry more leading than
+                                 trailing side-bearing, so the ink sits right of true
+                                 center — this nudges it back to optical center. -->
+                            <Button x:Name="TriggerButton" Margin="6,0,0,0" MinWidth="64"
+                                    Padding="11,5,13,5"
+                                    ToolTip="Click, then press a key · Esc clears"
+                                    Click="TriggerButton_Click"/>
+                            <TextBlock Text="Mode" Foreground="{StaticResource InkMutedBrush}"
+                                       Margin="14,0,0,0" VerticalAlignment="Center"/>
+                            <ComboBox x:Name="ModeBox" Width="110" Margin="6,0,0,0"
+                                      VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
+                                <ComboBoxItem Content="Once"/>
+                                <ComboBoxItem Content="While held"/>
+                                <ComboBoxItem Content="Toggle"/>
+                            </ComboBox>
+                        </StackPanel>
+                        <!-- Generous transparent padding = a forgiving hover/click
+                             target around the title. The underline is a separate
+                             rectangle so it can fade in (TextDecorations can't). -->
+                        <Border x:Name="NameHover" Background="Transparent" Padding="8,4"
+                                Margin="-8,-4,0,-4" HorizontalAlignment="Left"
+                                VerticalAlignment="Center" Cursor="IBeam"
+                                ToolTip="Click to rename"
+                                MouseLeftButtonDown="NameText_Click">
+                            <Grid>
+                                <TextBlock x:Name="NameText" FontSize="19" FontWeight="SemiBold"/>
+                                <Rectangle Height="1.5" VerticalAlignment="Bottom" Margin="1,0,1,-2"
+                                           Fill="{StaticResource InkMutedBrush}">
+                                    <Rectangle.Style>
+                                        <Style TargetType="Rectangle">
+                                            <Setter Property="Opacity" Value="0"/>
+                                            <Style.Triggers>
+                                                <DataTrigger Binding="{Binding IsMouseOver, ElementName=NameHover}"
+                                                             Value="True">
+                                                    <DataTrigger.EnterActions>
+                                                        <BeginStoryboard>
+                                                            <Storyboard>
+                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                 To="1" Duration="0:0:0.15"/>
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </DataTrigger.EnterActions>
+                                                    <DataTrigger.ExitActions>
+                                                        <BeginStoryboard>
+                                                            <Storyboard>
+                                                                <DoubleAnimation Storyboard.TargetProperty="Opacity"
+                                                                                 To="0" Duration="0:0:0.20"/>
+                                                            </Storyboard>
+                                                        </BeginStoryboard>
+                                                    </DataTrigger.ExitActions>
+                                                </DataTrigger>
+                                            </Style.Triggers>
+                                        </Style>
+                                    </Rectangle.Style>
+                                </Rectangle>
+                                <TextBox x:Name="NameEditBox" Visibility="Collapsed"
+                                         Style="{StaticResource GhostTextBox}"
+                                         FontSize="19" FontWeight="SemiBold" MinWidth="60"
+                                         HorizontalAlignment="Left"
+                                         LostFocus="NameEdit_LostFocus" KeyDown="NameEdit_KeyDown"/>
+                            </Grid>
+                        </Border>
+                    </DockPanel>
+
+                    <!-- timeline header + step tools (new steps insert after the
+                         selected step, or at the end when nothing is selected) -->
+                    <DockPanel Grid.Row="1" Margin="0,0,0,8">
+                        <TextBlock Text="Timeline" Style="{StaticResource Eyebrow}"
+                                   VerticalAlignment="Center"/>
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button x:Name="AddStepButton" Padding="8,3" Click="AddStep_Click">
+                                <StackPanel Orientation="Horizontal">
+                                    <TextBlock Text="Add"/>
+                                    <Path Data="M 0,0 L 3.5,4 L 7,0" Margin="6,1,0,0"
+                                          VerticalAlignment="Center"
+                                          Stroke="{StaticResource InkMutedBrush}" StrokeThickness="1.4"
+                                          StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                </StackPanel>
+                            </Button>
+                            <Button x:Name="AppendRecordButton" Content="Record" Margin="6,0,0,0"
+                                    Padding="8,3" ToolTip="Record input into this macro"
+                                    Click="AppendRecord_Click"/>
+                        </StackPanel>
+                    </DockPanel>
+
+                    <!-- steps: double-click edits the value in place, drag reorders
+                         live (wired in code by ListReorder), shift-click selects a
+                         range, Delete deletes the selection, right-click a row for
+                         edits or empty space for inserts -->
+                    <Border Grid.Row="2" Background="{StaticResource SurfaceBrush}"
+                            BorderBrush="{StaticResource HairlineBrush}" BorderThickness="1"
+                            CornerRadius="4" Padding="2,4">
+                        <ListBox x:Name="EventsList" SelectionMode="Extended"
+                                 MouseDoubleClick="EventsList_MouseDoubleClick"
+                                 PreviewMouseRightButtonDown="EventsList_RightClick"
+                                 KeyDown="EventsList_KeyDown"/>
                     </Border>
-                </DockPanel>
-
-                <!-- timeline header + step tools (new steps insert after the
-                     selected step, or at the end when nothing is selected) -->
-                <DockPanel Grid.Row="1" Margin="0,0,0,8">
-                    <TextBlock Text="Timeline" Style="{StaticResource Eyebrow}"
-                               VerticalAlignment="Center"/>
-                    <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
-                        <Button x:Name="AddStepButton" Padding="8,3" Click="AddStep_Click">
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="Add"/>
-                                <Path Data="M 0,0 L 3.5,4 L 7,0" Margin="6,1,0,0"
-                                      VerticalAlignment="Center"
-                                      Stroke="{StaticResource InkMutedBrush}" StrokeThickness="1.4"
-                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                            </StackPanel>
-                        </Button>
-                        <Button x:Name="AppendRecordButton" Content="Record" Margin="6,0,0,0"
-                                Padding="8,3" ToolTip="Record input into this macro"
-                                Click="AppendRecord_Click"/>
-                    </StackPanel>
-                </DockPanel>
-
-                <!-- steps: double-click edits the value in place, drag reorders
-                     live (wired in code by ListReorder), shift-click selects a
-                     range, Delete deletes the selection, right-click a row for
-                     edits or empty space for inserts -->
-                <Border Grid.Row="2" Background="{StaticResource SurfaceBrush}"
-                        BorderBrush="{StaticResource HairlineBrush}" BorderThickness="1"
-                        CornerRadius="4" Padding="2,4">
-                    <ListBox x:Name="EventsList" SelectionMode="Extended"
-                             MouseDoubleClick="EventsList_MouseDoubleClick"
-                             PreviewMouseRightButtonDown="EventsList_RightClick"
-                             KeyDown="EventsList_KeyDown"/>
-                </Border>
+                </Grid>
             </Grid>
+        </DockPanel>
+
+        <!-- Key-capture overlay: the shell blurs and an empty keycap waits in
+             the center, its border breathing in the accent until the captured
+             key stamps it. Shown/hidden in code (ShowCaptureOverlay); clicking
+             anywhere cancels the capture. -->
+        <Grid x:Name="CaptureOverlay" Visibility="Collapsed" Opacity="0"
+              MouseLeftButtonDown="CaptureOverlay_Click">
+            <Grid.Background>
+                <SolidColorBrush Color="{StaticResource BgColor}" Opacity="0.72"/>
+            </Grid.Background>
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
+                <Border MinWidth="64" Height="56" Padding="16,0"
+                        HorizontalAlignment="Center" CornerRadius="7" BorderThickness="1.5"
+                        Background="{StaticResource FieldBrush}">
+                    <Border.BorderBrush>
+                        <SolidColorBrush x:Name="CaptureKeycapStroke"
+                                         Color="{StaticResource HairlineStrongColor}"/>
+                    </Border.BorderBrush>
+                    <Border.Effect>
+                        <DropShadowEffect BlurRadius="22" ShadowDepth="3" Opacity="0.45"/>
+                    </Border.Effect>
+                    <TextBlock x:Name="CaptureKeyName" FontSize="20" FontWeight="SemiBold"
+                               HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                </Border>
+                <TextBlock x:Name="CapturePrompt" Margin="0,20,0,0" FontSize="14.5"
+                           HorizontalAlignment="Center"/>
+                <TextBlock x:Name="CaptureHint" Margin="0,7,0,0" FontSize="12"
+                           Foreground="{StaticResource InkFaintBrush}"
+                           HorizontalAlignment="Center"/>
+            </StackPanel>
         </Grid>
-    </DockPanel>
+    </Grid>
 </Window>

@@ -236,6 +236,111 @@ public class MacroEngineTests
     }
 
     [Fact]
+    public async Task Scroll_RunOnceEmitsScrollInOrderWithClicks()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(sink, []);
+
+        await engine
+            .RunOnceAsync(
+                new Macro(
+                    "wheel",
+                    [
+                        new KeyDownEvent(KeyCode.VcA),
+                        new ScrollEvent(ScrollDirection.Down, 3),
+                        new KeyUpEvent(KeyCode.VcA),
+                    ]
+                )
+            )
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal(
+            [$"down:{KeyCode.VcA}", "scroll:Down:3", $"up:{KeyCode.VcA}"],
+            sink.Snapshot()
+        );
+    }
+
+    // Parks playback between an on-press and an on-release half until the
+    // binding is asked to stop — the tail (key-up) still runs before the end.
+    private static readonly MacroEvent[] HoldAUntilStop =
+    [
+        new KeyDownEvent(KeyCode.VcA),
+        new DelayEvent(1, infinite: true),
+        new KeyUpEvent(KeyCode.VcA),
+    ];
+
+    [Fact]
+    public async Task InfiniteWait_WhileHeld_ParksUntilReleaseThenFinishesTheCycle()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(
+            sink,
+            [Bind(PlaybackMode.WhileHeld, HoldAUntilStop)]
+        );
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        await Task.Delay(100); // settle: parked, so the key-up must NOT arrive yet
+        Assert.Equal([$"down:{KeyCode.VcA}"], sink.Snapshot());
+
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => Stopped(sink));
+        Assert.Equal([$"down:{KeyCode.VcA}", $"up:{KeyCode.VcA}"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task InfiniteWait_Toggle_ParksUntilSecondPressThenFinishesTheCycle()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(sink, [Bind(PlaybackMode.Toggle, HoldAUntilStop)]);
+
+        // The first press parks it; the release only clears TriggerIsDown so
+        // the second press is seen as a real press, not auto-repeat.
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        await Task.Delay(100); // settle: parked, so the key-up must NOT arrive yet
+        Assert.Equal([$"down:{KeyCode.VcA}"], sink.Snapshot());
+
+        // The second press asks it to stop; the tail runs and playback ends.
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => Stopped(sink));
+        Assert.Equal([$"down:{KeyCode.VcA}", $"up:{KeyCode.VcA}"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task InfiniteWait_IsSkippedByRunOnce()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(sink, []);
+
+        // "Run now" has no binding that could stop it — the infinite wait must
+        // be a no-op, not a hang, and the steps after it still run.
+        await engine
+            .RunOnceAsync(new Macro("hold", HoldAUntilStop))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal([$"down:{KeyCode.VcA}", $"up:{KeyCode.VcA}"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task InfiniteWait_HardStopWhileParkedReleasesHeldKeys()
+    {
+        var sink = new RecordingSink();
+        var engine = new MacroEngine(sink, [Bind(PlaybackMode.Once, HoldAUntilStop)]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+
+        // Dispose while parked at the infinite wait: the scripted KeyUp never
+        // runs, so the engine must release A itself.
+        await engine.DisposeAsync();
+
+        Assert.Equal($"up:{KeyCode.VcA}", sink.Snapshot()[^1]);
+    }
+
+    [Fact]
     public async Task UnarmedKeysAreNotHandled()
     {
         var sink = new RecordingSink();
@@ -301,6 +406,14 @@ public class MacroEngineTests
             lock (gate)
             {
                 calls.Add($"mup:{button}");
+            }
+        }
+
+        public void Scroll(ScrollDirection direction, int clicks)
+        {
+            lock (gate)
+            {
+                calls.Add($"scroll:{direction}:{clicks}");
             }
         }
 

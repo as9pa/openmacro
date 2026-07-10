@@ -13,6 +13,7 @@ public interface IInputSink
     void KeyUp(KeyCode key);
     void MouseDown(MouseButton button);
     void MouseUp(MouseButton button);
+    void Scroll(ScrollDirection direction, int clicks);
     void Text(string text);
 }
 
@@ -26,6 +27,13 @@ public sealed class SharpHookInputSink(IEventSimulator simulator) : IInputSink
     public void MouseDown(MouseButton button) => simulator.SimulateMousePress(button);
 
     public void MouseUp(MouseButton button) => simulator.SimulateMouseRelease(button);
+
+    // SharpHook rotation: positive scrolls up; 120 is one wheel detent on
+    // Windows, and multiples work everywhere it ships.
+    public void Scroll(ScrollDirection direction, int clicks) =>
+        simulator.SimulateMouseWheel(
+            (short)(clicks * 120 * (direction == ScrollDirection.Up ? 1 : -1))
+        );
 
     public void Text(string text) => simulator.SimulateTextEntry(text);
 }

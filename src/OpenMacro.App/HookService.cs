@@ -4,6 +4,17 @@ using SharpHook.Data;
 
 namespace OpenMacro.App;
 
+/// <summary>What a one-shot "press anything" capture saw: a key, a mouse
+/// button, or a wheel scroll.</summary>
+public abstract record CapturedInput
+{
+    public sealed record Key(KeyCode Code) : CapturedInput;
+
+    public sealed record Mouse(MouseButton Button) : CapturedInput;
+
+    public sealed record Scroll(ScrollDirection Direction) : CapturedInput;
+}
+
 /// <summary>
 /// Owns the global hook and everything that listens to it: the macro engine,
 /// the recorder, and one-shot trigger capture. The hook exists only while at
@@ -20,6 +31,7 @@ public sealed class HookService : IAsyncDisposable
     private GlobalHookType hookType;
     private MacroEngine? engine;
     private Action<KeyCode>? captureCallback;
+    private Action<CapturedInput>? inputCaptureCallback;
 
     // libuiohook has one process-wide run loop, so hooks must start and stop
     // strictly one at a time. Dispose() only signals the loop to stop and
@@ -122,11 +134,26 @@ public sealed class HookService : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Like <see cref="CaptureNextKey"/> but the next mouse button or wheel
+    /// scroll counts too (this is the "Add input" flow, so the mouse hook is
+    /// up while it waits). The captured event is suppressed.
+    /// </summary>
+    public void CaptureNextInput(Action<CapturedInput> onCaptured)
+    {
+        lock (gate)
+        {
+            inputCaptureCallback = onCaptured;
+            UpdateHook();
+        }
+    }
+
     public void CancelCapture()
     {
         lock (gate)
         {
             captureCallback = null;
+            inputCaptureCallback = null;
             UpdateHook();
         }
     }
@@ -134,11 +161,19 @@ public sealed class HookService : IAsyncDisposable
     // Caller must hold the gate.
     private void UpdateHook()
     {
-        var needed = engine is not null || recorder.IsRecording || captureCallback is not null;
+        var needed =
+            engine is not null
+            || recorder.IsRecording
+            || captureCallback is not null
+            || inputCaptureCallback is not null;
 
-        // Mouse events only matter while recording; the rest of the time the
-        // narrower keyboard-only hook keeps the trust story simple.
-        var neededType = recorder.IsRecording ? GlobalHookType.All : GlobalHookType.Keyboard;
+        // Mouse events only matter while recording or waiting on an "Add
+        // input" capture; the rest of the time the narrower keyboard-only
+        // hook keeps the trust story simple.
+        var neededType =
+            recorder.IsRecording || inputCaptureCallback is not null
+                ? GlobalHookType.All
+                : GlobalHookType.Keyboard;
 
         if (hook is not null && (!needed || hookType != neededType))
         {
@@ -164,6 +199,7 @@ public sealed class HookService : IAsyncDisposable
             next.KeyReleased += OnKeyReleased;
             next.MousePressed += OnMousePressed;
             next.MouseReleased += OnMouseReleased;
+            next.MouseWheel += OnMouseWheel;
             hook = next;
             hookType = neededType;
 
@@ -182,15 +218,67 @@ public sealed class HookService : IAsyncDisposable
         }
     }
 
+    // One-shot claim of a pending "Add input" capture; drops the hook back
+    // to keyboard-only (or off) once claimed.
+    private Action<CapturedInput>? TakeInputCapture()
+    {
+        lock (gate)
+        {
+            var capture = inputCaptureCallback;
+            if (capture is not null)
+            {
+                inputCaptureCallback = null;
+                UpdateHook();
+            }
+            return capture;
+        }
+    }
+
     private void OnMousePressed(object? sender, MouseHookEventArgs e)
     {
-        if (e.IsEventSimulated || !recorder.IsRecording)
+        if (e.IsEventSimulated)
+            return;
+
+        // Input capture takes clicks anywhere — including on our own window,
+        // which the overlay is covering.
+        if (TakeInputCapture() is { } capture)
+        {
+            e.SuppressEvent = true;
+            capture(new CapturedInput.Mouse(e.Data.Button));
+            return;
+        }
+
+        if (!recorder.IsRecording)
             return;
 
         if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) == true)
             return;
 
         recorder.OnMouseDown(e.Data.Button);
+    }
+
+    private void OnMouseWheel(object? sender, MouseWheelHookEventArgs e)
+    {
+        // Tilt-wheel (horizontal) scrolling isn't a macro step.
+        if (e.IsEventSimulated || e.Data.Direction != MouseWheelScrollDirection.Vertical)
+            return;
+
+        var direction = e.Data.Rotation > 0 ? ScrollDirection.Up : ScrollDirection.Down;
+
+        if (TakeInputCapture() is { } capture)
+        {
+            e.SuppressEvent = true;
+            capture(new CapturedInput.Scroll(direction));
+            return;
+        }
+
+        if (!recorder.IsRecording)
+            return;
+
+        if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) == true)
+            return;
+
+        recorder.OnScroll(direction);
     }
 
     private void OnMouseReleased(object? sender, MouseHookEventArgs e)
@@ -209,7 +297,8 @@ public sealed class HookService : IAsyncDisposable
         if (e.IsEventSimulated)
             return;
 
-        // Priority: trigger capture, then recording, then armed macros.
+        // Priority: trigger capture, then input capture, then recording,
+        // then armed macros.
         Action<KeyCode>? capture;
         lock (gate)
         {
@@ -225,6 +314,13 @@ public sealed class HookService : IAsyncDisposable
         {
             e.SuppressEvent = true;
             capture(e.Data.KeyCode);
+            return;
+        }
+
+        if (TakeInputCapture() is { } inputCapture)
+        {
+            e.SuppressEvent = true;
+            inputCapture(new CapturedInput.Key(e.Data.KeyCode));
             return;
         }
 
@@ -263,6 +359,7 @@ public sealed class HookService : IAsyncDisposable
         lock (gate)
         {
             captureCallback = null;
+            inputCaptureCallback = null;
             oldEngine = engine;
             engine = null;
             oldHook = hook;
