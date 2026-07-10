@@ -543,6 +543,7 @@ public partial class MainWindow : Window
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItemFor("Rename", StartNameEdit));
         menu.Items.Add(MenuItemFor("Change trigger…", BeginTriggerCapture));
+        menu.Items.Add(BuildAppFilterMenu());
         menu.Items.Add(MenuItemFor("Duplicate", DuplicateSelectedBinding));
         menu.Items.Add(MenuItemFor("Delete", DeleteSelectedBinding));
         menu.Items.Add(new Separator());
@@ -557,6 +558,104 @@ public partial class MainWindow : Window
             )
         );
         BindingsList.ContextMenu = menu;
+    }
+
+    /// <summary>"Only in app": limits the selected binding to firing while one
+    /// app has focus. Lists apps that currently have a window; elsewhere the
+    /// trigger key types normally.</summary>
+    private MenuItem BuildAppFilterMenu()
+    {
+        var current = bindings[Selected].AppFilter;
+        var root = new MenuItem { Header = "Only in app" };
+
+        var anywhere = new MenuItem
+        {
+            Header = "Anywhere",
+            IsCheckable = true,
+            IsChecked = current is null,
+        };
+        anywhere.Click += (_, _) => SetAppFilter(null);
+        root.Items.Add(anywhere);
+        root.Items.Add(new Separator());
+
+        var listed = false;
+        foreach (var (name, title) in RunningApps())
+        {
+            var item = new MenuItem
+            {
+                Header = name,
+                IsCheckable = true,
+                IsChecked = string.Equals(current, name, StringComparison.OrdinalIgnoreCase),
+                ToolTip = title,
+            };
+            item.Click += (_, _) => SetAppFilter(name);
+            root.Items.Add(item);
+            listed = string.Equals(current, name, StringComparison.OrdinalIgnoreCase) || listed;
+        }
+
+        // The filtered app isn't running right now: still show (and keep) it.
+        if (current is not null && !listed)
+        {
+            var item = new MenuItem
+            {
+                Header = current,
+                IsCheckable = true,
+                IsChecked = true,
+                ToolTip = "not running",
+            };
+            item.Click += (_, _) => SetAppFilter(current);
+            root.Items.Add(item);
+        }
+
+        return root;
+    }
+
+    private static (string Name, string Title)[] RunningApps()
+    {
+        var apps = new List<(string Name, string Title)>();
+        foreach (var process in System.Diagnostics.Process.GetProcesses())
+        {
+            // Some processes refuse these queries or exit mid-enumeration —
+            // they just aren't candidates.
+            try
+            {
+                if (
+                    process.Id != Environment.ProcessId
+                    && process.MainWindowHandle != 0
+                    && process.MainWindowTitle.Length > 0
+                )
+                    apps.Add((process.ProcessName, process.MainWindowTitle));
+            }
+            catch (Exception e)
+                when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                // skip it
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        return apps.DistinctBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    private void SetAppFilter(string? app)
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        bindings[i] = bindings[i] with { AppFilter = app };
+        SaveAndRearm();
+        RefreshBindingsList(i);
+        Status(
+            app is null
+                ? $"{bindings[i].Macro.Name} fires anywhere"
+                : $"{bindings[i].Macro.Name} fires only in {app}"
+        );
     }
 
     private void BindingsList_KeyDown(object sender, KeyEventArgs e)
@@ -1236,7 +1335,9 @@ public partial class MainWindow : Window
             labels.Children.Add(
                 new TextBlock
                 {
-                    Text = $"{TriggerLabel(b)} · {ModeLabel(b.Mode)}",
+                    Text =
+                        $"{TriggerLabel(b)} · {ModeLabel(b.Mode)}"
+                        + (b.AppFilter is null ? "" : $" · {b.AppFilter}"),
                     Foreground = SubtleText,
                     FontSize = 11,
                 }

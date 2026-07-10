@@ -79,7 +79,7 @@ public sealed class HookService : IAsyncDisposable
         lock (gate)
         {
             old = engine;
-            engine = new MacroEngine(sink, bindings);
+            engine = new MacroEngine(sink, bindings, ForegroundApp.ProcessName);
             UpdateHook();
         }
 
