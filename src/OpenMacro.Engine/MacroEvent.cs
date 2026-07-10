@@ -13,6 +13,7 @@ namespace OpenMacro.Engine;
 [JsonDerivedType(typeof(MouseUpEvent), "mouseUp")]
 [JsonDerivedType(typeof(TextEvent), "text")]
 [JsonDerivedType(typeof(DelayEvent), "delay")]
+[JsonDerivedType(typeof(WaitForReleaseEvent), "waitForRelease")]
 public abstract record MacroEvent;
 
 public sealed record KeyDownEvent(KeyCode Key) : MacroEvent;
@@ -24,6 +25,15 @@ public sealed record MouseDownEvent(MouseButton Button) : MacroEvent;
 public sealed record MouseUpEvent(MouseButton Button) : MacroEvent;
 
 public sealed record TextEvent(string Text) : MacroEvent;
+
+/// <summary>
+/// Pauses playback until the trigger key is physically released. Splits a
+/// macro into an on-press part and an on-release part — e.g. hold G while the
+/// trigger is held, release G when it's let go. Completes immediately if the
+/// trigger is already up (or when the macro runs without a trigger, e.g.
+/// "Run now").
+/// </summary>
+public sealed record WaitForReleaseEvent : MacroEvent;
 
 public sealed record DelayEvent : MacroEvent
 {

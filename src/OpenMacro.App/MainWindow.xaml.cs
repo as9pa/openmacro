@@ -675,6 +675,7 @@ public partial class MainWindow : Window
         menu.Items.Add(
             MenuItemFor("Insert text", () => InsertThenEdit(new TextEvent("text"), atEnd: true))
         );
+        menu.Items.Add(MenuItemFor("Insert wait for keybind release", InsertWaitForRelease));
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItemFor("Insert left click", () => InsertClick(MouseButton.Button1)));
         menu.Items.Add(MenuItemFor("Insert right click", () => InsertClick(MouseButton.Button2)));
@@ -699,6 +700,12 @@ public partial class MainWindow : Window
     {
         EventsList.SelectedIndex = -1;
         InsertEvents(new MouseDownEvent(button), new DelayEvent(30), new MouseUpEvent(button));
+    }
+
+    private void InsertWaitForRelease()
+    {
+        EventsList.SelectedIndex = -1; // empty-space insert goes to the end
+        InsertEvents(new WaitForReleaseEvent());
     }
 
     private void ReplaceSelectedStep(MacroEvent step) =>
@@ -769,6 +776,12 @@ public partial class MainWindow : Window
         );
         menu.Items.Add(
             MenuItemFor("Add text", () => InsertThenEdit(new TextEvent("text"), atEnd: false))
+        );
+        menu.Items.Add(
+            MenuItemFor(
+                "Add wait for keybind release",
+                () => InsertEvents(new WaitForReleaseEvent())
+            )
         );
         menu.IsOpen = true;
     }
@@ -1125,6 +1138,7 @@ public partial class MainWindow : Window
             MouseUpEvent m => ("release", "", MouseName(m.Button), ""),
             DelayEvent d => ("wait", "", d.Milliseconds.ToString(), " ms"),
             TextEvent t => ("type", "“", t.Text, "”"),
+            WaitForReleaseEvent => ("wait", "", "until keybind released", ""),
             _ => ("?", "", e.ToString() ?? "", ""),
         };
 

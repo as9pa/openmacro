@@ -159,6 +159,82 @@ public class MacroEngineTests
         Assert.Equal($"up:{KeyCode.VcA}", sink.Snapshot()[^1]);
     }
 
+    // The e-drag pattern: hold G while the trigger is held, release it (and
+    // tap E) when the trigger is let go.
+    private static readonly MacroEvent[] HoldGUntilRelease =
+    [
+        new KeyDownEvent(KeyCode.VcG),
+        new WaitForReleaseEvent(),
+        new KeyUpEvent(KeyCode.VcG),
+    ];
+
+    [Fact]
+    public async Task WaitForRelease_PausesUntilTriggerReleased()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(
+            sink,
+            [Bind(PlaybackMode.Once, HoldGUntilRelease)]
+        );
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        await Task.Delay(100); // settle: the key-up must NOT arrive on its own
+        Assert.Equal([$"down:{KeyCode.VcG}"], sink.Snapshot());
+
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 2);
+        Assert.Equal([$"down:{KeyCode.VcG}", $"up:{KeyCode.VcG}"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task WaitForRelease_CompletesImmediatelyWhenTriggerAlreadyUp()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(
+            sink,
+            [Bind(PlaybackMode.Once, HoldGUntilRelease)]
+        );
+
+        // A quick tap: the trigger is already up by the time playback reaches
+        // the wait step, so the macro must run straight through.
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 2);
+    }
+
+    [Fact]
+    public async Task WaitForRelease_IsSkippedByRunOnce()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(sink, []);
+
+        // "Run now" has no trigger to wait on — the wait must be a no-op, not
+        // a hang.
+        await engine
+            .RunOnceAsync(new Macro("drag", HoldGUntilRelease))
+            .WaitAsync(TimeSpan.FromSeconds(5));
+
+        Assert.Equal([$"down:{KeyCode.VcG}", $"up:{KeyCode.VcG}"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task WaitForRelease_HardStopWhilePausedReleasesHeldKeys()
+    {
+        var sink = new RecordingSink();
+        var engine = new MacroEngine(sink, [Bind(PlaybackMode.Once, HoldGUntilRelease)]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+
+        // Dispose while paused at the wait step: the scripted KeyUp never
+        // runs, so the engine must release G itself.
+        await engine.DisposeAsync();
+
+        Assert.Equal($"up:{KeyCode.VcG}", sink.Snapshot()[^1]);
+    }
+
     [Fact]
     public async Task UnarmedKeysAreNotHandled()
     {
