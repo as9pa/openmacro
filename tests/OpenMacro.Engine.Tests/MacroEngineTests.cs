@@ -372,6 +372,72 @@ public class MacroEngineTests
         }
     }
 
+    [Fact]
+    public async Task AppFilter_FiresWhenForegroundMatchesCaseInsensitively()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("scoped", [new TextEvent("a")]),
+            PlaybackMode.Once,
+            AppFilter: "Game"
+        );
+        await using var engine = new MacroEngine(sink, [binding], () => "game");
+
+        Assert.True(engine.TriggerDown(KeyCode.VcCapsLock));
+        Assert.True(engine.TriggerUp(KeyCode.VcCapsLock));
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        Assert.Equal(["text:a"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task AppFilter_PassesThroughWhenAnotherAppIsFocused()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("scoped", [new TextEvent("a")]),
+            PlaybackMode.Once,
+            AppFilter: "game"
+        );
+        await using var engine = new MacroEngine(sink, [binding], () => "editor");
+
+        // The wrong app has focus: the key must act like a normal key — the
+        // press, its auto-repeats, and the release all pass through, and
+        // nothing fires.
+        Assert.False(engine.TriggerDown(KeyCode.VcCapsLock));
+        Assert.False(engine.TriggerDown(KeyCode.VcCapsLock)); // typematic repeat
+        Assert.False(engine.TriggerUp(KeyCode.VcCapsLock));
+
+        await Task.Delay(100); // settle: nothing may fire late
+        Assert.Empty(sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task AppFilter_ReevaluatesOnEachPress()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("scoped", [new TextEvent("a")]),
+            PlaybackMode.Once,
+            AppFilter: "game"
+        );
+        var foreground = "editor";
+        await using var engine = new MacroEngine(sink, [binding], () => foreground);
+
+        Assert.False(engine.TriggerDown(KeyCode.VcCapsLock));
+        Assert.False(engine.TriggerUp(KeyCode.VcCapsLock));
+
+        foreground = "game"; // focus moved to the right app
+        Assert.True(engine.TriggerDown(KeyCode.VcCapsLock));
+        Assert.True(engine.TriggerUp(KeyCode.VcCapsLock));
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        Assert.Equal(["text:a"], sink.Snapshot());
+    }
+
     private sealed class RecordingSink : IInputSink
     {
         private readonly Lock gate = new();

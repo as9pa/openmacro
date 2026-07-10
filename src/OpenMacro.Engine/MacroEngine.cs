@@ -11,13 +11,23 @@ public sealed class MacroEngine : IAsyncDisposable
     private readonly IInputSink sink;
     private readonly Dictionary<KeyCode, BindingState> bindings;
 
+    // Who has focus, for bindings with an app filter — injected so the engine
+    // stays OS-agnostic and tests can fake it. Null means "no filtering
+    // available": filtered bindings fire everywhere.
+    private readonly Func<string?>? foregroundApp;
+
     // Hard stop: cancels mid-cycle (dispose/app exit). Soft stop is per-binding
     // StopRequested, which lets the cycle in progress finish (plan: graceful stop).
     private readonly CancellationTokenSource hardStop = new();
 
-    public MacroEngine(IInputSink sink, IEnumerable<Binding> bindings)
+    public MacroEngine(
+        IInputSink sink,
+        IEnumerable<Binding> bindings,
+        Func<string?>? foregroundApp = null
+    )
     {
         this.sink = sink;
+        this.foregroundApp = foregroundApp;
         this.bindings = bindings.ToDictionary(b => b.Trigger, b => new BindingState(b));
     }
 
@@ -36,9 +46,22 @@ public sealed class MacroEngine : IAsyncDisposable
         lock (state)
         {
             // Typematic auto-repeat streams key-downs while held: keep
-            // suppressing, but only the first real press acts.
+            // suppressing, but only the first real press acts. An unclaimed
+            // hold (wrong app had focus at the press) keeps passing through.
             if (state.TriggerIsDown)
                 return true;
+            if (state.UnclaimedDown)
+                return false;
+
+            // App filter: with another app focused the key must behave like
+            // a normal key — no fire, no suppression, and the matching
+            // key-up passes through too.
+            if (!MatchesForeground(state.Binding))
+            {
+                state.UnclaimedDown = true;
+                return false;
+            }
+
             state.TriggerIsDown = true;
 
             switch (state.Binding.Mode)
@@ -74,6 +97,13 @@ public sealed class MacroEngine : IAsyncDisposable
 
         lock (state)
         {
+            // The press passed through (app filter), so its release must too.
+            if (state.UnclaimedDown)
+            {
+                state.UnclaimedDown = false;
+                return false;
+            }
+
             state.TriggerIsDown = false;
 
             // Wake a playback paused at a WaitForRelease step.
@@ -85,6 +115,14 @@ public sealed class MacroEngine : IAsyncDisposable
         }
 
         return true;
+    }
+
+    private bool MatchesForeground(Binding binding)
+    {
+        if (binding.AppFilter is not { Length: > 0 } filter || foregroundApp is null)
+            return true;
+
+        return string.Equals(foregroundApp(), filter, StringComparison.OrdinalIgnoreCase);
     }
 
     // Caller must hold the state lock. Waking the StopWaiter lets a playback
@@ -289,6 +327,10 @@ public sealed class MacroEngine : IAsyncDisposable
 
         // All mutable state below is guarded by lock(this).
         public bool TriggerIsDown;
+
+        // Physically held, but the press wasn't ours (app filter said no):
+        // repeats and the release keep passing through untouched.
+        public bool UnclaimedDown;
         public bool StopRequested;
         public bool IsRunning;
         public int QueuedRuns;
