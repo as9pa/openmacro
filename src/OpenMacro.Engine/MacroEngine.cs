@@ -83,6 +83,21 @@ public sealed class MacroEngine : IAsyncDisposable
                     else
                         EnsureRunning(state, repeat: true);
                     break;
+
+                case PlaybackMode.Repeat:
+                    // A fixed batch of runs, not a queue: pressing again while
+                    // the batch is in flight stops it (like Toggle) instead of
+                    // stacking N more runs.
+                    if (state.IsRunning)
+                    {
+                        RequestStop(state);
+                    }
+                    else
+                    {
+                        state.QueuedRuns = Math.Max(1, state.Binding.RepeatCount);
+                        EnsureRunning(state, repeat: false);
+                    }
+                    break;
             }
         }
 
@@ -176,7 +191,8 @@ public sealed class MacroEngine : IAsyncDisposable
 
                 lock (state)
                 {
-                    var runAgain = repeat ? !state.StopRequested : --state.QueuedRuns > 0;
+                    // StopRequested also ends a queued (Repeat-mode) batch early.
+                    var runAgain = !state.StopRequested && (repeat || --state.QueuedRuns > 0);
 
                     if (!runAgain || hardStop.IsCancellationRequested)
                     {

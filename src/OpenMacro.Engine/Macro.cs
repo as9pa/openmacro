@@ -14,16 +14,22 @@ public enum PlaybackMode
 
     /// <summary>Press starts repeating, press again stops (after the cycle in progress).</summary>
     Toggle,
+
+    /// <summary>Press runs the macro <see cref="Binding.RepeatCount"/> times;
+    /// press again stops early (after the cycle in progress).</summary>
+    Repeat,
 }
 
 // Enabled defaults to true so configs saved before the flag existed load as
 // enabled. AppFilter is a process name without extension ("notepad"),
 // case-insensitive; null fires anywhere. When the filter doesn't match the
 // foreground app, the trigger key acts as a normal key (passes through).
+// RepeatCount only applies in Repeat mode; anything below 1 plays once.
 public sealed record Binding(
     KeyCode Trigger,
     Macro Macro,
     PlaybackMode Mode,
     bool Enabled = true,
-    string? AppFilter = null
+    string? AppFilter = null,
+    int RepeatCount = 1
 );

@@ -18,7 +18,7 @@ Keyboard software rarely does proper macros well (the Wooting's own Wootomation 
 | **C# / .NET 10 + WPF** | Windows-native; key hooks, input sending, and the Wooting SDK are all easy interop; real polished GUI. .NET 10 is the current LTS. |
 | **Host-side software injection** | Same method SteelSeries & DS4Windows use under the hood. Confirmed fine — it was always software. |
 | **Not stored on the keyboard** | The 60HE firmware has no macro engine (only DKS / Mod Tap / Toggle Key / remaps / 4 profiles), so macros must run in the app. |
-| **Features:** record → editable timeline w/ delays → **Once / While-held / Toggle** | The DS4Windows macro model. |
+| **Features:** record → editable timeline w/ delays → **Once / While-held / Toggle / ×N times** | The DS4Windows macro model, plus a fixed-count repeat. |
 | **Analog depth features** | **Phase 2, optional module** — e.g. one key firing different actions at different actuation depths, depth-threshold macro triggers, or mapping press depth to a continuous output. The thing no normal keyboard can do. |
 | **One codebase → two releases** | Ships as two installers — **Core** (any keyboard) and **Wooting-integrated** — built from the *same* codebase, not a fork. The analog module only activates when a Wooting is present, so non-Wooting users pay ~zero for it. A fork would mean maintaining two diverging copies (every fix applied twice); build flavors from one source is lighter *and* easier. |
 | **Graceful stop by default** | On stop, finish the current cycle cleanly (with an option to stop immediately). Either way, **never leave a key held down** — always release on exit. |
@@ -65,7 +65,9 @@ MacroEvent  ─┬─ KeyDown(key)        // press
 
 Binding     = Trigger + Macro + PlaybackMode + Enabled + AppFilter?
               Trigger      = a key   // Phase 2: key + depth threshold
-              PlaybackMode = Once | WhileHeld | Toggle
+              PlaybackMode = Once | WhileHeld | Toggle | Repeat (×N)
+              RepeatCount  = how many times one press plays the macro in
+                             Repeat mode; press again to stop early
               AppFilter    = process name; only fire while that app has
                              focus — elsewhere the key types normally
 
@@ -140,7 +142,7 @@ Restraint here also serves the lightweight goal: fewer, simpler controls render 
 ## Roadmap
 
 1. **MVP engine** ✅ — one key → one fixed keystroke sequence, firing reliably. *(global hooks, input synthesis, events)*
-2. **Playback modes** ✅ — Once / repeat while held / toggle. *(state machines, timers, async)*
+2. **Playback modes** ✅ — Once / repeat while held / toggle / ×N times. *(state machines, timers, async)*
 3. **Recorder** ✅ — capture live events with timing → JSON, then edit them. *(serialization, data modeling)*
 4. **The GUI** ✅ *(the long pole)* — WPF visual keyboard + editable timeline. *(XAML, data binding, MVVM)* — shipped in two slices: shell (bindings list, record flow, timeline editor), then visual keyboard + tray
 5. **Per-app profiles** — detect foreground app, swap macro set. *(Win32 window queries)* — first slice shipped: a per-binding **app filter** (right-click a macro → *Only in app*) checks `GetForegroundWindow` at trigger time; when another app is focused the trigger passes through as a normal key. Profile *sets* still to come.

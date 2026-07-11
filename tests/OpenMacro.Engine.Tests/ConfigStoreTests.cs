@@ -114,6 +114,31 @@ public class ConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void RoundTripsRepeatCount()
+    {
+        Binding[] bindings =
+        [
+            new(
+                KeyCode.VcF6,
+                new Macro("burst", [new TextEvent("a")]),
+                PlaybackMode.Repeat,
+                RepeatCount: 25
+            ),
+            new(KeyCode.VcF7, new Macro("plain", [new TextEvent("x")]), PlaybackMode.Once),
+        ];
+
+        ConfigStore.Save(bindings, path);
+        var loaded = ConfigStore.Load(path);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(PlaybackMode.Repeat, loaded[0].Mode);
+        Assert.Equal(25, loaded[0].RepeatCount);
+        // Pre-repeat configs omit the property, so it must load back as the
+        // default of 1.
+        Assert.Equal(1, loaded[1].RepeatCount);
+    }
+
+    [Fact]
     public void SavedFileUsesReadableNames()
     {
         ConfigStore.Save(

@@ -117,7 +117,17 @@
                                 <ComboBoxItem Content="Once"/>
                                 <ComboBoxItem Content="While held"/>
                                 <ComboBoxItem Content="Toggle"/>
+                                <ComboBoxItem Content="× times"/>
                             </ComboBox>
+                            <!-- Only visible in "× times" mode. Commits on
+                                 Enter/focus-loss, not per keystroke, so a
+                                 half-typed "10" never saves as 1. -->
+                            <TextBox x:Name="RepeatBox" Width="44" Margin="6,0,0,0"
+                                     Visibility="Collapsed" TextAlignment="Center"
+                                     VerticalContentAlignment="Center"
+                                     ToolTip="How many times one press plays the macro"
+                                     LostFocus="RepeatBox_LostFocus"
+                                     KeyDown="RepeatBox_KeyDown"/>
                         </StackPanel>
                         <!-- Generous transparent padding = a forgiving hover/click
                              target around the title. The underline is a separate

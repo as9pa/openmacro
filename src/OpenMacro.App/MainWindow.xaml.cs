@@ -499,6 +499,46 @@ public partial class MainWindow : Window
             return;
 
         bindings[i] = bindings[i] with { Mode = (PlaybackMode)ModeBox.SelectedIndex };
+        SyncRepeatBox(bindings[i]);
+        SaveAndRearm();
+        RefreshBindingsList(i);
+    }
+
+    /// <summary>The count box rides along with the mode picker: visible (and
+    /// filled in) only while the binding is in Repeat mode.</summary>
+    private void SyncRepeatBox(Binding b)
+    {
+        RepeatBox.Visibility =
+            b.Mode == PlaybackMode.Repeat ? Visibility.Visible : Visibility.Collapsed;
+        RepeatBox.Text = Math.Max(1, b.RepeatCount).ToString();
+    }
+
+    private void RepeatBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+            CommitRepeatCount();
+    }
+
+    private void RepeatBox_LostFocus(object sender, RoutedEventArgs e) => CommitRepeatCount();
+
+    private void CommitRepeatCount()
+    {
+        var i = Selected;
+        if (refreshing || i < 0)
+            return;
+
+        // Garbage or out-of-range input snaps back to the saved value
+        // instead of guessing.
+        if (!int.TryParse(RepeatBox.Text, out var count) || count < 1 || count > 100_000)
+        {
+            RepeatBox.Text = Math.Max(1, bindings[i].RepeatCount).ToString();
+            return;
+        }
+
+        if (count == bindings[i].RepeatCount)
+            return;
+
+        bindings[i] = bindings[i] with { RepeatCount = count };
         SaveAndRearm();
         RefreshBindingsList(i);
     }
@@ -1413,7 +1453,7 @@ public partial class MainWindow : Window
                 new TextBlock
                 {
                     Text =
-                        $"{TriggerLabel(b)} · {ModeLabel(b.Mode)}"
+                        $"{TriggerLabel(b)} · {ModeLabel(b)}"
                         + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}"),
                     Foreground = SubtleText,
                     FontSize = 11,
@@ -1469,7 +1509,7 @@ public partial class MainWindow : Window
             var bound = bindings.FirstOrDefault(b => b.Trigger == code);
             button.Background = bound is null ? defaultKeyBrush : BoundKeyBrush;
             button.FontWeight = bound is null ? FontWeights.Normal : FontWeights.SemiBold;
-            button.ToolTip = bound is null ? null : $"{bound.Macro.Name} · {ModeLabel(bound.Mode)}";
+            button.ToolTip = bound is null ? null : $"{bound.Macro.Name} · {ModeLabel(bound)}";
         }
     }
 
@@ -1561,6 +1601,7 @@ public partial class MainWindow : Window
         NameText.Visibility = Visibility.Visible;
         TriggerButton.Content = TriggerLabel(b);
         ModeBox.SelectedIndex = (int)b.Mode;
+        SyncRepeatBox(b);
 
         EventsList.Items.Clear();
         foreach (var macroEvent in b.Macro.Events)
@@ -1866,13 +1907,14 @@ public partial class MainWindow : Window
     private static string KeyName(KeyCode key) =>
         key.ToString().StartsWith("Vc") ? key.ToString()[2..] : key.ToString();
 
-    private static string ModeLabel(PlaybackMode mode) =>
-        mode switch
+    private static string ModeLabel(Binding b) =>
+        b.Mode switch
         {
             PlaybackMode.Once => "once",
             PlaybackMode.WhileHeld => "while held",
             PlaybackMode.Toggle => "toggle",
-            _ => mode.ToString(),
+            PlaybackMode.Repeat => $"×{Math.Max(1, b.RepeatCount)}",
+            _ => b.Mode.ToString(),
         };
 
     protected override void OnClosing(CancelEventArgs e)

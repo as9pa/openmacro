@@ -134,6 +134,102 @@ public class MacroEngineTests
     }
 
     [Fact]
+    public async Task Repeat_OnePressPlaysConfiguredNumberOfTimes()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("burst", [new TextEvent("a")]),
+            PlaybackMode.Repeat,
+            RepeatCount: 3
+        );
+        await using var engine = new MacroEngine(sink, [binding]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 3);
+        await Task.Delay(100); // settle: a 4th run must NOT arrive
+        Assert.Equal(["text:a", "text:a", "text:a"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task Repeat_SecondPressStopsTheBatchEarly()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("long batch", PressA),
+            PlaybackMode.Repeat,
+            RepeatCount: 1000
+        );
+        await using var engine = new MacroEngine(sink, [binding]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 6); // a few cycles in
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => Stopped(sink));
+
+        var calls = sink.Snapshot();
+        // Far fewer than 1000 cycles ran, the last one finished cleanly, and
+        // nothing is left held.
+        Assert.True(calls.Length < 100);
+        Assert.Equal($"up:{KeyCode.VcA}", calls[^1]);
+        Assert.Equal(
+            calls.Count(c => c.StartsWith("down:")),
+            calls.Count(c => c.StartsWith("up:"))
+        );
+    }
+
+    [Fact]
+    public async Task Repeat_CanRunAgainAfterTheBatchCompletes()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("burst", [new TextEvent("a")]),
+            PlaybackMode.Repeat,
+            RepeatCount: 2
+        );
+        await using var engine = new MacroEngine(sink, [binding]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 2);
+        await WaitUntilAsync(() => Stopped(sink));
+
+        // A fresh press starts a fresh batch of 2 (stale counters would break this).
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 4);
+        await Task.Delay(100);
+        Assert.Equal(4, sink.Snapshot().Length);
+    }
+
+    [Fact]
+    public async Task Repeat_CountBelowOnePlaysOnce()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("burst", [new TextEvent("a")]),
+            PlaybackMode.Repeat,
+            RepeatCount: 0
+        );
+        await using var engine = new MacroEngine(sink, [binding]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        await Task.Delay(100);
+        Assert.Equal(["text:a"], sink.Snapshot());
+    }
+
+    [Fact]
     public async Task HardStop_ReleasesHeldKeys()
     {
         var sink = new RecordingSink();
