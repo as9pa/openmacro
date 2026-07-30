@@ -365,27 +365,49 @@
         </Setter>
     </Style>
 
+    <!-- One template for leaf items AND submenu headers: MenuItem only opens
+         a submenu if its template has a Popup bound to IsSubmenuOpen — without
+         it, an item with children is an inert row that ignores clicks. -->
     <Style TargetType="MenuItem">
         <Setter Property="Foreground" Value="{StaticResource InkBrush}"/>
         <Setter Property="Template">
             <Setter.Value>
                 <ControlTemplate TargetType="MenuItem">
-                    <Border x:Name="Chrome" Background="Transparent" Padding="10,6" Margin="4,0"
-                            CornerRadius="3">
-                        <Grid>
-                            <Grid.ColumnDefinitions>
-                                <ColumnDefinition Width="14"/>
-                                <ColumnDefinition Width="*"/>
-                            </Grid.ColumnDefinitions>
-                            <Path x:Name="Check" Data="M 0,3.5 L 2.8,6.3 L 8,0.7"
-                                  VerticalAlignment="Center" Visibility="Hidden"
-                                  Stroke="{StaticResource AccentBrush}" StrokeThickness="1.6"
-                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
-                            <ContentPresenter Grid.Column="1" ContentSource="Header"
-                                              VerticalAlignment="Center" RecognizesAccessKey="True"/>
-                        </Grid>
-                    </Border>
+                    <Grid>
+                        <Border x:Name="Chrome" Background="Transparent" Padding="10,6" Margin="4,0"
+                                CornerRadius="3">
+                            <Grid>
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="14"/>
+                                    <ColumnDefinition Width="*"/>
+                                    <ColumnDefinition Width="Auto"/>
+                                </Grid.ColumnDefinitions>
+                                <Path x:Name="Check" Data="M 0,3.5 L 2.8,6.3 L 8,0.7"
+                                      VerticalAlignment="Center" Visibility="Hidden"
+                                      Stroke="{StaticResource AccentBrush}" StrokeThickness="1.6"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                <ContentPresenter Grid.Column="1" ContentSource="Header"
+                                                  VerticalAlignment="Center" RecognizesAccessKey="True"/>
+                                <Path x:Name="Arrow" Grid.Column="2" Data="M 0,0 L 4,4 L 0,8"
+                                      Margin="12,0,0,0" VerticalAlignment="Center" Visibility="Collapsed"
+                                      Stroke="{StaticResource InkMutedBrush}" StrokeThickness="1.4"
+                                      StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                            </Grid>
+                        </Border>
+                        <Popup IsOpen="{Binding IsSubmenuOpen, RelativeSource={RelativeSource TemplatedParent}}"
+                               Placement="Right" AllowsTransparency="True" PopupAnimation="Fade"
+                               Focusable="False" VerticalOffset="-5" HorizontalOffset="-2">
+                            <Border Background="{StaticResource SurfaceBrush}" CornerRadius="4"
+                                    BorderBrush="{StaticResource HairlineStrongBrush}" BorderThickness="1"
+                                    Padding="0,4">
+                                <ItemsPresenter/>
+                            </Border>
+                        </Popup>
+                    </Grid>
                     <ControlTemplate.Triggers>
+                        <Trigger Property="Role" Value="SubmenuHeader">
+                            <Setter TargetName="Arrow" Property="Visibility" Value="Visible"/>
+                        </Trigger>
                         <Trigger Property="IsHighlighted" Value="True">
                             <Setter TargetName="Chrome" Property="Background" Value="{StaticResource HoverBrush}"/>
                         </Trigger>

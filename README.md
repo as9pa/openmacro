@@ -63,9 +63,11 @@ MacroEvent  ─┬─ KeyDown(key)        // press
              ├─ WaitForRelease      // pause until the trigger key is let go
              └─ LaunchApp(path)     // still planned
 
-Binding     = Trigger + Macro + PlaybackMode + Enabled
+Binding     = Trigger + Macro + PlaybackMode + Enabled + AppFilter?
               Trigger      = a key   // Phase 2: key + depth threshold
               PlaybackMode = Once | WhileHeld | Toggle
+              AppFilter    = process name; only fire while that app has
+                             focus — elsewhere the key types normally
 
 Profile     = list of Bindings + optional "match this app" rule
 Config      = list of Profiles      // → saved to %AppData% as JSON
@@ -141,7 +143,7 @@ Restraint here also serves the lightweight goal: fewer, simpler controls render 
 2. **Playback modes** ✅ — Once / repeat while held / toggle. *(state machines, timers, async)*
 3. **Recorder** ✅ — capture live events with timing → JSON, then edit them. *(serialization, data modeling)*
 4. **The GUI** ✅ *(the long pole)* — WPF visual keyboard + editable timeline. *(XAML, data binding, MVVM)* — shipped in two slices: shell (bindings list, record flow, timeline editor), then visual keyboard + tray
-5. **Per-app profiles** — detect foreground app, swap macro set. *(Win32 window queries)*
+5. **Per-app profiles** — detect foreground app, swap macro set. *(Win32 window queries)* — first slice shipped: a per-binding **app filter** (right-click a macro → *Only in app*) checks `GetForegroundWindow` at trigger time; when another app is focused the trigger passes through as a normal key. Profile *sets* still to come.
 6. **Analog triggers** *(Phase 2 — beats SteelSeries)* — depth thresholds via the SDK. *(P/Invoke, polling, hysteresis)*
 
 ## The code so far (phases 1–4)

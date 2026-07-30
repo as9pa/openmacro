@@ -91,6 +91,29 @@ public class ConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void RoundTripsAppFilter()
+    {
+        Binding[] bindings =
+        [
+            new(
+                KeyCode.VcF6,
+                new Macro("scoped", [new TextEvent("gg")]),
+                PlaybackMode.Once,
+                AppFilter: "notepad"
+            ),
+            new(KeyCode.VcF7, new Macro("global", [new TextEvent("x")]), PlaybackMode.Once),
+        ];
+
+        ConfigStore.Save(bindings, path);
+        var loaded = ConfigStore.Load(path);
+
+        Assert.NotNull(loaded);
+        Assert.Equal("notepad", loaded[0].AppFilter);
+        // Pre-filter configs omit the property, so it must load back as null.
+        Assert.Null(loaded[1].AppFilter);
+    }
+
+    [Fact]
     public void SavedFileUsesReadableNames()
     {
         ConfigStore.Save(

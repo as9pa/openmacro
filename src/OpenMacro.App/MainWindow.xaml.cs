@@ -7,6 +7,7 @@ using System.Windows.Interop;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
+using System.Windows.Media.Imaging;
 using Hardcodet.Wpf.TaskbarNotification;
 using OpenMacro.Engine;
 using SharpHook.Data;
@@ -543,6 +544,7 @@ public partial class MainWindow : Window
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItemFor("Rename", StartNameEdit));
         menu.Items.Add(MenuItemFor("Change trigger…", BeginTriggerCapture));
+        menu.Items.Add(BuildAppFilterMenu());
         menu.Items.Add(MenuItemFor("Duplicate", DuplicateSelectedBinding));
         menu.Items.Add(MenuItemFor("Delete", DeleteSelectedBinding));
         menu.Items.Add(new Separator());
@@ -557,6 +559,160 @@ public partial class MainWindow : Window
             )
         );
         BindingsList.ContextMenu = menu;
+    }
+
+    /// <summary>"Only in app": limits the selected binding to firing while one
+    /// app has focus. Lists apps that currently have a window; elsewhere the
+    /// trigger key types normally.</summary>
+    private MenuItem BuildAppFilterMenu()
+    {
+        var current = bindings[Selected].AppFilter;
+        var root = new MenuItem { Header = "Only in app" };
+
+        var anywhere = new MenuItem
+        {
+            Header = "Anywhere",
+            IsCheckable = true,
+            IsChecked = current is null,
+        };
+        anywhere.Click += (_, _) => SetAppFilter(null);
+        root.Items.Add(anywhere);
+        root.Items.Add(new Separator());
+
+        var listed = false;
+        foreach (var (name, title) in RunningApps())
+        {
+            var item = new MenuItem
+            {
+                Header = name,
+                IsCheckable = true,
+                IsChecked = string.Equals(current, name, StringComparison.OrdinalIgnoreCase),
+                ToolTip = title,
+            };
+            item.Click += (_, _) => SetAppFilter(name);
+            root.Items.Add(item);
+            listed = string.Equals(current, name, StringComparison.OrdinalIgnoreCase) || listed;
+        }
+
+        // The filtered app isn't running right now: still show (and keep) it.
+        if (current is not null && !listed)
+        {
+            var item = new MenuItem
+            {
+                Header = current,
+                IsCheckable = true,
+                IsChecked = true,
+                ToolTip = "not running",
+            };
+            item.Click += (_, _) => SetAppFilter(current);
+            root.Items.Add(item);
+        }
+
+        return root;
+    }
+
+    private static (string Name, string Title)[] RunningApps()
+    {
+        var apps = new List<(string Name, string Title)>();
+        foreach (var process in System.Diagnostics.Process.GetProcesses())
+        {
+            // Some processes refuse these queries or exit mid-enumeration —
+            // they just aren't candidates.
+            try
+            {
+                if (
+                    process.Id != Environment.ProcessId
+                    && process.MainWindowHandle != 0
+                    && process.MainWindowTitle.Length > 0
+                )
+                    apps.Add((process.ProcessName, process.MainWindowTitle));
+            }
+            catch (Exception e)
+                when (e is InvalidOperationException or System.ComponentModel.Win32Exception)
+            {
+                // skip it
+            }
+            finally
+            {
+                process.Dispose();
+            }
+        }
+
+        return apps.DistinctBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .OrderBy(a => a.Name, StringComparer.OrdinalIgnoreCase)
+            .ToArray();
+    }
+
+    // Icons resolved once per process name; misses are retried on the next
+    // refresh (the app may have started since).
+    private static readonly Dictionary<string, ImageSource> appIconCache = new(
+        StringComparer.OrdinalIgnoreCase
+    );
+
+    /// <summary>The filtered app's icon, from a currently running instance's
+    /// executable — null only when it isn't running or no instance yields a
+    /// path (the limited query even works on anti-cheat-protected games).</summary>
+    private static ImageSource? GetAppIcon(string processName)
+    {
+        if (appIconCache.TryGetValue(processName, out var cached))
+            return cached;
+
+        var processes = System.Diagnostics.Process.GetProcessesByName(processName);
+        try
+        {
+            foreach (var process in processes)
+            {
+                if (ForegroundApp.ExecutablePath(process.Id) is not { Length: > 0 } path)
+                    continue;
+
+                using var extracted = System.Drawing.Icon.ExtractAssociatedIcon(path);
+                if (extracted is null)
+                    continue;
+
+                var source = Imaging.CreateBitmapSourceFromHIcon(
+                    extracted.Handle,
+                    Int32Rect.Empty,
+                    BitmapSizeOptions.FromWidthAndHeight(16, 16)
+                );
+                source.Freeze(); // usable from any thread, no live resource behind it
+                appIconCache[processName] = source;
+                return source;
+            }
+
+            return null;
+        }
+        catch (Exception e)
+            when (e
+                    is System.ComponentModel.Win32Exception
+                        or InvalidOperationException
+                        or System.IO.FileNotFoundException
+                        // ExtractAssociatedIcon refuses UNC paths
+                        or ArgumentException
+            )
+        {
+            return null;
+        }
+        finally
+        {
+            foreach (var process in processes)
+                process.Dispose();
+        }
+    }
+
+    private void SetAppFilter(string? app)
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        bindings[i] = bindings[i] with { AppFilter = app };
+        SaveAndRearm();
+        RefreshBindingsList(i);
+        Status(
+            app is null
+                ? $"{bindings[i].Macro.Name} fires anywhere"
+                : $"{bindings[i].Macro.Name} fires only in {app}"
+        );
     }
 
     private void BindingsList_KeyDown(object sender, KeyEventArgs e)
@@ -1230,13 +1386,35 @@ public partial class MainWindow : Window
             check.Unchecked += EnabledChanged;
 
             var labels = new StackPanel { Margin = new Thickness(8, 2, 0, 2) };
-            labels.Children.Add(
+
+            // App-filtered macros carry the app's icon next to the name; when
+            // the icon can't be resolved (app not running), the subtitle
+            // spells the filter out instead.
+            var icon = b.AppFilter is null ? null : GetAppIcon(b.AppFilter);
+            var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
+            nameRow.Children.Add(
                 new TextBlock { Text = b.Macro.Name, FontWeight = FontWeights.SemiBold }
             );
+            if (icon is not null)
+                nameRow.Children.Add(
+                    new Image
+                    {
+                        Source = icon,
+                        Width = 14,
+                        Height = 14,
+                        Margin = new Thickness(6, 0, 0, 0),
+                        VerticalAlignment = VerticalAlignment.Center,
+                        ToolTip = $"only in {b.AppFilter}",
+                    }
+                );
+            labels.Children.Add(nameRow);
+
             labels.Children.Add(
                 new TextBlock
                 {
-                    Text = $"{TriggerLabel(b)} · {ModeLabel(b.Mode)}",
+                    Text =
+                        $"{TriggerLabel(b)} · {ModeLabel(b.Mode)}"
+                        + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}"),
                     Foreground = SubtleText,
                     FontSize = 11,
                 }
