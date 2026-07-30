@@ -32,6 +32,7 @@ public sealed class HookService : IAsyncDisposable
     private MacroEngine? engine;
     private Action<KeyCode>? captureCallback;
     private Action<CapturedInput>? inputCaptureCallback;
+    private Action<CapturedInput>? triggerCaptureCallback;
 
     // libuiohook has one process-wide run loop, so hooks must start and stop
     // strictly one at a time. Dispose() only signals the loop to stop and
@@ -148,12 +149,30 @@ public sealed class HookService : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// One-shot capture for setting a binding's trigger: the next key or mouse
+    /// button is claimed, suppressed, and reported. Left click (Button1) is the
+    /// exception — it passes through so the overlay scrim's click-to-cancel
+    /// still works, and it's deliberately not allowed as a trigger. Wheel
+    /// scrolls are ignored (a scroll can't be a trigger). The mouse hook is up
+    /// while this waits.
+    /// </summary>
+    public void CaptureNextTrigger(Action<CapturedInput> onCaptured)
+    {
+        lock (gate)
+        {
+            triggerCaptureCallback = onCaptured;
+            UpdateHook();
+        }
+    }
+
     public void CancelCapture()
     {
         lock (gate)
         {
             captureCallback = null;
             inputCaptureCallback = null;
+            triggerCaptureCallback = null;
             UpdateHook();
         }
     }
@@ -165,13 +184,18 @@ public sealed class HookService : IAsyncDisposable
             engine is not null
             || recorder.IsRecording
             || captureCallback is not null
-            || inputCaptureCallback is not null;
+            || inputCaptureCallback is not null
+            || triggerCaptureCallback is not null;
 
-        // Mouse events only matter while recording or waiting on an "Add
-        // input" capture; the rest of the time the narrower keyboard-only
-        // hook keeps the trust story simple.
+        // Mouse events matter while recording, waiting on an "Add input" or
+        // trigger capture, or when the armed engine has a mouse-button trigger
+        // to watch; the rest of the time the narrower keyboard-only hook keeps
+        // the trust story simple.
         var neededType =
-            recorder.IsRecording || inputCaptureCallback is not null
+            recorder.IsRecording
+            || inputCaptureCallback is not null
+            || triggerCaptureCallback is not null
+            || engine?.HasMouseTriggers == true
                 ? GlobalHookType.All
                 : GlobalHookType.Keyboard;
 
@@ -234,6 +258,22 @@ public sealed class HookService : IAsyncDisposable
         }
     }
 
+    // One-shot claim of a pending trigger capture; drops the hook back to
+    // keyboard-only (or off) once claimed.
+    private Action<CapturedInput>? TakeTriggerCapture()
+    {
+        lock (gate)
+        {
+            var capture = triggerCaptureCallback;
+            if (capture is not null)
+            {
+                triggerCaptureCallback = null;
+                UpdateHook();
+            }
+            return capture;
+        }
+    }
+
     private void OnMousePressed(object? sender, MouseHookEventArgs e)
     {
         if (e.IsEventSimulated)
@@ -248,13 +288,27 @@ public sealed class HookService : IAsyncDisposable
             return;
         }
 
-        if (!recorder.IsRecording)
+        // Trigger capture claims any button except left click, which passes
+        // through untouched so the overlay scrim's click-to-cancel handles it
+        // (and left click is not an allowed trigger anyway).
+        if (e.Data.Button != MouseButton.Button1 && TakeTriggerCapture() is { } triggerCapture)
+        {
+            e.SuppressEvent = true;
+            triggerCapture(new CapturedInput.Mouse(e.Data.Button));
             return;
+        }
 
-        if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) == true)
+        if (recorder.IsRecording)
+        {
+            // Own-window clicks operate the recorder (e.g. Stop), not the
+            // macro; armed triggers are inert while recording.
+            if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) != true)
+                recorder.OnMouseDown(e.Data.Button);
             return;
+        }
 
-        recorder.OnMouseDown(e.Data.Button);
+        if (engine?.MouseTriggerDown(e.Data.Button) == true)
+            e.SuppressEvent = true;
     }
 
     private void OnMouseWheel(object? sender, MouseWheelHookEventArgs e)
@@ -283,13 +337,18 @@ public sealed class HookService : IAsyncDisposable
 
     private void OnMouseReleased(object? sender, MouseHookEventArgs e)
     {
-        if (e.IsEventSimulated || !recorder.IsRecording)
+        if (e.IsEventSimulated)
             return;
 
-        if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) == true)
+        if (recorder.IsRecording)
+        {
+            if (IsOwnWindowPoint?.Invoke(e.Data.X, e.Data.Y) != true)
+                recorder.OnMouseUp(e.Data.Button);
             return;
+        }
 
-        recorder.OnMouseUp(e.Data.Button);
+        if (engine?.MouseTriggerUp(e.Data.Button) == true)
+            e.SuppressEvent = true;
     }
 
     private void OnKeyPressed(object? sender, KeyboardHookEventArgs e)
@@ -297,8 +356,8 @@ public sealed class HookService : IAsyncDisposable
         if (e.IsEventSimulated)
             return;
 
-        // Priority: trigger capture, then input capture, then recording,
-        // then armed macros.
+        // Priority: key capture (step replacement), then trigger capture, then
+        // input capture, then recording, then armed macros.
         Action<KeyCode>? capture;
         lock (gate)
         {
@@ -314,6 +373,13 @@ public sealed class HookService : IAsyncDisposable
         {
             e.SuppressEvent = true;
             capture(e.Data.KeyCode);
+            return;
+        }
+
+        if (TakeTriggerCapture() is { } triggerCapture)
+        {
+            e.SuppressEvent = true;
+            triggerCapture(new CapturedInput.Key(e.Data.KeyCode));
             return;
         }
 
@@ -360,6 +426,7 @@ public sealed class HookService : IAsyncDisposable
         {
             captureCallback = null;
             inputCaptureCallback = null;
+            triggerCaptureCallback = null;
             oldEngine = engine;
             engine = null;
             oldHook = hook;

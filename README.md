@@ -64,7 +64,7 @@ MacroEvent  ─┬─ KeyDown(key)        // press
              └─ LaunchApp(path)     // still planned
 
 Binding     = Trigger + Macro + PlaybackMode + Enabled + AppFilter?
-              Trigger      = a key   // Phase 2: key + depth threshold
+              Trigger      = a key or mouse button (left click excluded)   // Phase 2: key + depth threshold
               PlaybackMode = Once | WhileHeld | Toggle | Repeat (×N)
               RepeatCount  = how many times one press plays the macro in
                              Repeat mode; press again to stop early
