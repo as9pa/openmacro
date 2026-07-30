@@ -134,6 +134,102 @@ public class MacroEngineTests
     }
 
     [Fact]
+    public async Task Repeat_OnePressPlaysConfiguredNumberOfTimes()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("burst", [new TextEvent("a")]),
+            PlaybackMode.Repeat,
+            RepeatCount: 3
+        );
+        await using var engine = new MacroEngine(sink, [binding]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 3);
+        await Task.Delay(100); // settle: a 4th run must NOT arrive
+        Assert.Equal(["text:a", "text:a", "text:a"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task Repeat_SecondPressStopsTheBatchEarly()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("long batch", PressA),
+            PlaybackMode.Repeat,
+            RepeatCount: 1000
+        );
+        await using var engine = new MacroEngine(sink, [binding]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 6); // a few cycles in
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => Stopped(sink));
+
+        var calls = sink.Snapshot();
+        // Far fewer than 1000 cycles ran, the last one finished cleanly, and
+        // nothing is left held.
+        Assert.True(calls.Length < 100);
+        Assert.Equal($"up:{KeyCode.VcA}", calls[^1]);
+        Assert.Equal(
+            calls.Count(c => c.StartsWith("down:")),
+            calls.Count(c => c.StartsWith("up:"))
+        );
+    }
+
+    [Fact]
+    public async Task Repeat_CanRunAgainAfterTheBatchCompletes()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("burst", [new TextEvent("a")]),
+            PlaybackMode.Repeat,
+            RepeatCount: 2
+        );
+        await using var engine = new MacroEngine(sink, [binding]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 2);
+        await WaitUntilAsync(() => Stopped(sink));
+
+        // A fresh press starts a fresh batch of 2 (stale counters would break this).
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 4);
+        await Task.Delay(100);
+        Assert.Equal(4, sink.Snapshot().Length);
+    }
+
+    [Fact]
+    public async Task Repeat_CountBelowOnePlaysOnce()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcCapsLock,
+            new Macro("burst", [new TextEvent("a")]),
+            PlaybackMode.Repeat,
+            RepeatCount: 0
+        );
+        await using var engine = new MacroEngine(sink, [binding]);
+
+        engine.TriggerDown(KeyCode.VcCapsLock);
+        engine.TriggerUp(KeyCode.VcCapsLock);
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        await Task.Delay(100);
+        Assert.Equal(["text:a"], sink.Snapshot());
+    }
+
+    [Fact]
     public async Task HardStop_ReleasesHeldKeys()
     {
         var sink = new RecordingSink();
@@ -436,6 +532,166 @@ public class MacroEngineTests
 
         await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
         Assert.Equal(["text:a"], sink.Snapshot());
+    }
+
+    // ---- mouse-button triggers ----
+
+    // Mouse-trigger counterpart of Bind: Trigger stays VcUndefined and the
+    // binding fires on the given mouse button instead.
+    private static Binding MouseBind(
+        MouseButton button,
+        PlaybackMode mode,
+        params MacroEvent[] events
+    ) => new(KeyCode.VcUndefined, new Macro("test", events), mode, MouseTrigger: button);
+
+    [Fact]
+    public async Task MouseTrigger_Once_FiresExactlyOncePerPress()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(
+            sink,
+            [MouseBind(MouseButton.Button4, PlaybackMode.Once, new TextEvent("a"))]
+        );
+
+        Assert.True(engine.MouseTriggerDown(MouseButton.Button4));
+        Assert.True(engine.MouseTriggerUp(MouseButton.Button4));
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        await Task.Delay(100); // settle: catch extra fires
+        Assert.Equal(["text:a"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task MouseTrigger_UnboundButtonIsNotHandled()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(
+            sink,
+            [MouseBind(MouseButton.Button4, PlaybackMode.Once, new TextEvent("a"))]
+        );
+
+        Assert.False(engine.MouseTriggerDown(MouseButton.Button5));
+        Assert.False(engine.MouseTriggerUp(MouseButton.Button5));
+
+        await Task.Delay(100); // settle: nothing may fire
+        Assert.Empty(sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task MouseTrigger_WhileHeld_RepeatsUntilReleaseAndFinishesTheCycle()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(
+            sink,
+            [MouseBind(MouseButton.Button4, PlaybackMode.WhileHeld, PressA)]
+        );
+
+        engine.MouseTriggerDown(MouseButton.Button4);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 6); // at least 2 full cycles
+        engine.MouseTriggerUp(MouseButton.Button4);
+
+        await WaitUntilAsync(() => Stopped(sink));
+
+        var calls = sink.Snapshot();
+        // Graceful stop: the last cycle finished, so the final call is a key-up
+        // and downs/ups are balanced — nothing left held.
+        Assert.Equal($"up:{KeyCode.VcA}", calls[^1]);
+        Assert.Equal(
+            calls.Count(c => c.StartsWith("down:")),
+            calls.Count(c => c.StartsWith("up:"))
+        );
+    }
+
+    [Fact]
+    public async Task MouseTrigger_AppFilter_PassesThroughWhenAnotherAppIsFocused()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcUndefined,
+            new Macro("scoped", [new TextEvent("a")]),
+            PlaybackMode.Once,
+            AppFilter: "game",
+            MouseTrigger: MouseButton.Button4
+        );
+        await using var engine = new MacroEngine(sink, [binding], () => "editor");
+
+        // Wrong app has focus: the button acts like a normal button — both the
+        // press and its release pass through, and nothing fires.
+        Assert.False(engine.MouseTriggerDown(MouseButton.Button4));
+        Assert.False(engine.MouseTriggerUp(MouseButton.Button4));
+
+        await Task.Delay(100); // settle: nothing may fire late
+        Assert.Empty(sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task MouseTrigger_AppFilter_FiresWhenForegroundMatches()
+    {
+        var sink = new RecordingSink();
+        var binding = new Binding(
+            KeyCode.VcUndefined,
+            new Macro("scoped", [new TextEvent("a")]),
+            PlaybackMode.Once,
+            AppFilter: "game",
+            MouseTrigger: MouseButton.Button4
+        );
+        await using var engine = new MacroEngine(sink, [binding], () => "game");
+
+        Assert.True(engine.MouseTriggerDown(MouseButton.Button4));
+        Assert.True(engine.MouseTriggerUp(MouseButton.Button4));
+
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        Assert.Equal(["text:a"], sink.Snapshot());
+    }
+
+    [Fact]
+    public async Task KeyAndMouseTriggers_CoexistAndFireIndependently()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(
+            sink,
+            [
+                new Binding(
+                    KeyCode.VcCapsLock,
+                    new Macro("keyed", [new TextEvent("k")]),
+                    PlaybackMode.Once
+                ),
+                MouseBind(MouseButton.Button4, PlaybackMode.Once, new TextEvent("m")),
+            ]
+        );
+
+        Assert.True(engine.TriggerDown(KeyCode.VcCapsLock));
+        Assert.True(engine.TriggerUp(KeyCode.VcCapsLock));
+        await WaitUntilAsync(() => sink.Snapshot().Contains("text:k"));
+
+        Assert.True(engine.MouseTriggerDown(MouseButton.Button4));
+        Assert.True(engine.MouseTriggerUp(MouseButton.Button4));
+        await WaitUntilAsync(() => sink.Snapshot().Contains("text:m"));
+
+        await Task.Delay(100); // settle: exactly one fire each
+        var calls = sink.Snapshot();
+        Assert.Equal(2, calls.Length);
+        Assert.Contains("text:k", calls);
+        Assert.Contains("text:m", calls);
+    }
+
+    [Fact]
+    public async Task MouseTrigger_WaitForRelease_PausesUntilButtonReleased()
+    {
+        var sink = new RecordingSink();
+        await using var engine = new MacroEngine(
+            sink,
+            [MouseBind(MouseButton.Button4, PlaybackMode.Once, HoldGUntilRelease)]
+        );
+
+        engine.MouseTriggerDown(MouseButton.Button4);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 1);
+        await Task.Delay(100); // settle: the key-up must NOT arrive on its own
+        Assert.Equal([$"down:{KeyCode.VcG}"], sink.Snapshot());
+
+        engine.MouseTriggerUp(MouseButton.Button4);
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 2);
+        Assert.Equal([$"down:{KeyCode.VcG}", $"up:{KeyCode.VcG}"], sink.Snapshot());
     }
 
     private sealed class RecordingSink : IInputSink

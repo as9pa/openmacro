@@ -10,6 +10,7 @@ public sealed class MacroEngine : IAsyncDisposable
 {
     private readonly IInputSink sink;
     private readonly Dictionary<KeyCode, BindingState> bindings;
+    private readonly Dictionary<MouseButton, BindingState> mouseBindings;
 
     // Who has focus, for bindings with an app filter — injected so the engine
     // stays OS-agnostic and tests can fake it. Null means "no filtering
@@ -28,21 +29,53 @@ public sealed class MacroEngine : IAsyncDisposable
     {
         this.sink = sink;
         this.foregroundApp = foregroundApp;
-        this.bindings = bindings.ToDictionary(b => b.Trigger, b => new BindingState(b));
+
+        // A binding triggers on either a key or a mouse button; MouseTrigger
+        // decides which dictionary owns it (the UI keeps only one set). The
+        // hook layer routes key-downs and mouse-downs to the matching one.
+        var states = bindings.Select(b => new BindingState(b)).ToList();
+        this.bindings = states
+            .Where(s => s.Binding.MouseTrigger is null)
+            .ToDictionary(s => s.Binding.Trigger);
+        mouseBindings = states
+            .Where(s => s.Binding.MouseTrigger is not null)
+            .ToDictionary(s => s.Binding.MouseTrigger!.Value);
     }
 
     public IReadOnlyCollection<KeyCode> ArmedKeys => bindings.Keys;
+
+    /// <summary>True if any armed binding triggers on a mouse button — the
+    /// hook layer needs the mouse hook up to watch for them.</summary>
+    public bool HasMouseTriggers => mouseBindings.Count > 0;
 
     /// <summary>
     /// Called on the hook thread for every real (non-simulated) key-down.
     /// Must stay fast. Returns true if the key is an armed trigger — the
     /// caller should suppress it.
     /// </summary>
-    public bool TriggerDown(KeyCode key)
-    {
-        if (!bindings.TryGetValue(key, out var state))
-            return false;
+    public bool TriggerDown(KeyCode key) =>
+        bindings.TryGetValue(key, out var state) && HandleTriggerDown(state);
 
+    /// <summary>Hook-thread counterpart for key-up. Returns true if armed.</summary>
+    public bool TriggerUp(KeyCode key) =>
+        bindings.TryGetValue(key, out var state) && HandleTriggerUp(state);
+
+    /// <summary>
+    /// Mouse-button counterpart of <see cref="TriggerDown"/> — same fire logic,
+    /// keyed by button. Returns true if the button is an armed trigger.
+    /// </summary>
+    public bool MouseTriggerDown(MouseButton button) =>
+        mouseBindings.TryGetValue(button, out var state) && HandleTriggerDown(state);
+
+    /// <summary>Hook-thread counterpart for mouse-button-up. Returns true if armed.</summary>
+    public bool MouseTriggerUp(MouseButton button) =>
+        mouseBindings.TryGetValue(button, out var state) && HandleTriggerUp(state);
+
+    // The shared body of a trigger press, written once for keys and mouse
+    // buttons. Returns true when the trigger is armed and its press should be
+    // suppressed; false when it must pass through (app filter didn't match).
+    private bool HandleTriggerDown(BindingState state)
+    {
         lock (state)
         {
             // Typematic auto-repeat streams key-downs while held: keep
@@ -53,9 +86,9 @@ public sealed class MacroEngine : IAsyncDisposable
             if (state.UnclaimedDown)
                 return false;
 
-            // App filter: with another app focused the key must behave like
-            // a normal key — no fire, no suppression, and the matching
-            // key-up passes through too.
+            // App filter: with another app focused the trigger must behave
+            // like a normal key/button — no fire, no suppression, and the
+            // matching release passes through too.
             if (!MatchesForeground(state.Binding))
             {
                 state.UnclaimedDown = true;
@@ -83,18 +116,30 @@ public sealed class MacroEngine : IAsyncDisposable
                     else
                         EnsureRunning(state, repeat: true);
                     break;
+
+                case PlaybackMode.Repeat:
+                    // A fixed batch of runs, not a queue: pressing again while
+                    // the batch is in flight stops it (like Toggle) instead of
+                    // stacking N more runs.
+                    if (state.IsRunning)
+                    {
+                        RequestStop(state);
+                    }
+                    else
+                    {
+                        state.QueuedRuns = Math.Max(1, state.Binding.RepeatCount);
+                        EnsureRunning(state, repeat: false);
+                    }
+                    break;
             }
         }
 
         return true;
     }
 
-    /// <summary>Hook-thread counterpart for key-up. Returns true if armed.</summary>
-    public bool TriggerUp(KeyCode key)
+    // The shared body of a trigger release. Returns true when armed.
+    private bool HandleTriggerUp(BindingState state)
     {
-        if (!bindings.TryGetValue(key, out var state))
-            return false;
-
         lock (state)
         {
             // The press passed through (app filter), so its release must too.
@@ -176,7 +221,8 @@ public sealed class MacroEngine : IAsyncDisposable
 
                 lock (state)
                 {
-                    var runAgain = repeat ? !state.StopRequested : --state.QueuedRuns > 0;
+                    // StopRequested also ends a queued (Repeat-mode) batch early.
+                    var runAgain = !state.StopRequested && (repeat || --state.QueuedRuns > 0);
 
                     if (!runAgain || hardStop.IsCancellationRequested)
                     {
@@ -312,7 +358,8 @@ public sealed class MacroEngine : IAsyncDisposable
         hardStop.Cancel();
 
         var playbacks = bindings
-            .Values.Select(s => s.Playback)
+            .Values.Concat(mouseBindings.Values)
+            .Select(s => s.Playback)
             .Where(t => t is not null)
             .Cast<Task>()
             .ToArray();

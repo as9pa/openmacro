@@ -177,28 +177,34 @@ public partial class MainWindow : Window
         }
     }
 
-    // Only enabled bindings with a real keybind; first binding wins a
-    // duplicate keybind (the UI enforces one enabled holder per key, but a
+    // Only enabled bindings with a real trigger; first binding wins a
+    // duplicate keybind (the UI enforces one enabled holder per trigger, but a
     // hand-edited config can still enable two).
     private Binding[] Armable() =>
         bindings
-            .Where(b => b.Enabled && b.Trigger != KeyCode.VcUndefined)
-            .DistinctBy(b => b.Trigger)
+            .Where(b => b.Enabled && b.HasTrigger)
+            .DistinctBy(b => (b.Trigger, b.MouseTrigger))
             .ToArray();
 
     /// <summary>
     /// Index of the enabled binding (other than <paramref name="except"/>)
-    /// holding this trigger, or -1. Macros may share a keybind, but only one
-    /// holder can be enabled at a time — every path that enables a binding
-    /// checks this and makes you uncheck the current holder first.
+    /// holding this trigger — a key or a mouse button — or -1. Macros may share
+    /// a keybind, but only one holder can be enabled at a time — every path
+    /// that enables a binding checks this and makes you uncheck the current
+    /// holder first. A trigger-less binding (VcUndefined + null) never counts.
     /// </summary>
-    private int EnabledHolderOf(KeyCode trigger, int except)
+    private int EnabledHolderOf(KeyCode trigger, MouseButton? mouseTrigger, int except)
     {
-        if (trigger == KeyCode.VcUndefined)
+        if (trigger == KeyCode.VcUndefined && mouseTrigger is null)
             return -1;
 
         for (var i = 0; i < bindings.Count; i++)
-            if (i != except && bindings[i].Enabled && bindings[i].Trigger == trigger)
+            if (
+                i != except
+                && bindings[i].Enabled
+                && bindings[i].Trigger == trigger
+                && bindings[i].MouseTrigger == mouseTrigger
+            )
                 return i;
 
         return -1;
@@ -300,6 +306,37 @@ public partial class MainWindow : Window
         );
     }
 
+    /// <summary>The trigger-capture counterpart of <see cref="CaptureKeyWithOverlay"/>:
+    /// a key or a mouse button (not left click, not a scroll — the hook filters
+    /// those out) sets the keybind. Esc reaches <paramref name="onInput"/> as a
+    /// key like any other — the flow reads it as "unassign". Clicking the scrim
+    /// (left click) cancels. <paramref name="onInput"/> runs on the UI thread.</summary>
+    private void CaptureTriggerWithOverlay(
+        string prompt,
+        string hint,
+        Action<CapturedInput> onInput
+    )
+    {
+        CapturePrompt.Text = prompt;
+        CaptureHint.Text = hint;
+        ShowCaptureOverlay();
+        hooks.CaptureNextTrigger(input =>
+            Dispatcher.Invoke(() =>
+            {
+                DismissCaptureOverlay(
+                    input switch
+                    {
+                        CapturedInput.Key { Code: KeyCode.VcEscape } => null,
+                        CapturedInput.Key k => KeyName(k.Code),
+                        CapturedInput.Mouse m => MouseName(m.Button),
+                        _ => null,
+                    }
+                );
+                onInput(input);
+            })
+        );
+    }
+
     private void CaptureOverlay_Click(object sender, MouseButtonEventArgs e)
     {
         hotkeyCapturing = false;
@@ -387,11 +424,25 @@ public partial class MainWindow : Window
         if (Selected < 0)
             return;
 
-        Status("press a key · Esc clears");
-        CaptureKeyWithOverlay(
-            "press a key to set the keybind",
-            "Esc clears the keybind",
-            TriggerCaptured
+        Status("press a key or mouse button · Esc clears");
+        CaptureTriggerWithOverlay(
+            "press a key or mouse button to set the keybind",
+            "Esc clears the keybind · left click is reserved",
+            input =>
+            {
+                switch (input)
+                {
+                    case CapturedInput.Key k:
+                        TriggerCaptured(k.Code);
+                        break;
+
+                    case CapturedInput.Mouse m:
+                        MouseTriggerCaptured(m.Button);
+                        break;
+
+                    // Scrolls never arrive here (the hook ignores them).
+                }
+            }
         );
     }
 
@@ -401,10 +452,16 @@ public partial class MainWindow : Window
         if (i < 0)
             return;
 
-        // Esc is reserved as "unassign", so it can never be a trigger itself.
+        // Esc is reserved as "unassign", so it can never be a trigger itself —
+        // clear the key trigger and any mouse trigger together.
         if (key == KeyCode.VcEscape)
         {
-            bindings[i] = bindings[i] with { Trigger = KeyCode.VcUndefined, Enabled = false };
+            bindings[i] = bindings[i] with
+            {
+                Trigger = KeyCode.VcUndefined,
+                MouseTrigger = null,
+                Enabled = false,
+            };
             SaveAndRearm();
             RefreshBindingsList(i);
             RefreshDetail();
@@ -414,14 +471,40 @@ public partial class MainWindow : Window
 
         // Sharing a keybind is fine, but if another holder is enabled this
         // one starts unchecked — enabling it means unchecking that one first.
-        var holder = EnabledHolderOf(key, i);
-        bindings[i] = bindings[i] with { Trigger = key, Enabled = holder < 0 };
+        // A key trigger clears any mouse trigger the binding had.
+        var holder = EnabledHolderOf(key, null, i);
+        bindings[i] = bindings[i] with { Trigger = key, MouseTrigger = null, Enabled = holder < 0 };
         SaveAndRearm();
         RefreshBindingsList(i);
         RefreshDetail();
         Status(
             holder < 0
                 ? $"keybind set · {KeyName(key)}"
+                : $"keybind set · uncheck {bindings[holder].Macro.Name} to enable this one"
+        );
+    }
+
+    private void MouseTriggerCaptured(MouseButton button)
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        // A mouse trigger clears the key trigger; the shared-keybind rule is
+        // the same as keys, just keyed by the button.
+        var holder = EnabledHolderOf(KeyCode.VcUndefined, button, i);
+        bindings[i] = bindings[i] with
+        {
+            Trigger = KeyCode.VcUndefined,
+            MouseTrigger = button,
+            Enabled = holder < 0,
+        };
+        SaveAndRearm();
+        RefreshBindingsList(i);
+        RefreshDetail();
+        Status(
+            holder < 0
+                ? $"keybind set · {MouseName(button)}"
                 : $"keybind set · uncheck {bindings[holder].Macro.Name} to enable this one"
         );
     }
@@ -499,6 +582,46 @@ public partial class MainWindow : Window
             return;
 
         bindings[i] = bindings[i] with { Mode = (PlaybackMode)ModeBox.SelectedIndex };
+        SyncRepeatBox(bindings[i]);
+        SaveAndRearm();
+        RefreshBindingsList(i);
+    }
+
+    /// <summary>The count box rides along with the mode picker: visible (and
+    /// filled in) only while the binding is in Repeat mode.</summary>
+    private void SyncRepeatBox(Binding b)
+    {
+        RepeatBox.Visibility =
+            b.Mode == PlaybackMode.Repeat ? Visibility.Visible : Visibility.Collapsed;
+        RepeatBox.Text = Math.Max(1, b.RepeatCount).ToString();
+    }
+
+    private void RepeatBox_KeyDown(object sender, KeyEventArgs e)
+    {
+        if (e.Key == Key.Enter)
+            CommitRepeatCount();
+    }
+
+    private void RepeatBox_LostFocus(object sender, RoutedEventArgs e) => CommitRepeatCount();
+
+    private void CommitRepeatCount()
+    {
+        var i = Selected;
+        if (refreshing || i < 0)
+            return;
+
+        // Garbage or out-of-range input snaps back to the saved value
+        // instead of guessing.
+        if (!int.TryParse(RepeatBox.Text, out var count) || count < 1 || count > 100_000)
+        {
+            RepeatBox.Text = Math.Max(1, bindings[i].RepeatCount).ToString();
+            return;
+        }
+
+        if (count == bindings[i].RepeatCount)
+            return;
+
+        bindings[i] = bindings[i] with { RepeatCount = count };
         SaveAndRearm();
         RefreshBindingsList(i);
     }
@@ -512,14 +635,16 @@ public partial class MainWindow : Window
 
         // Shared keybind: only one holder may be enabled — bounce the check
         // back off and point at the one to uncheck first.
-        var holder = enable ? EnabledHolderOf(bindings[i].Trigger, i) : -1;
+        var holder = enable
+            ? EnabledHolderOf(bindings[i].Trigger, bindings[i].MouseTrigger, i)
+            : -1;
         if (holder >= 0)
         {
             refreshing = true; // reverting the box is not a user edit
             check.IsChecked = false;
             refreshing = false;
             Status(
-                $"uncheck {bindings[holder].Macro.Name} first — both use {KeyName(bindings[i].Trigger)}"
+                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}"
             );
             return;
         }
@@ -736,11 +861,13 @@ public partial class MainWindow : Window
             return;
 
         var enabling = !bindings[i].Enabled;
-        var holder = enabling ? EnabledHolderOf(bindings[i].Trigger, i) : -1;
+        var holder = enabling
+            ? EnabledHolderOf(bindings[i].Trigger, bindings[i].MouseTrigger, i)
+            : -1;
         if (holder >= 0)
         {
             Status(
-                $"uncheck {bindings[holder].Macro.Name} first — both use {KeyName(bindings[i].Trigger)}"
+                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}"
             );
             return;
         }
@@ -1413,7 +1540,7 @@ public partial class MainWindow : Window
                 new TextBlock
                 {
                     Text =
-                        $"{TriggerLabel(b)} · {ModeLabel(b.Mode)}"
+                        $"{TriggerLabel(b)} · {ModeLabel(b)}"
                         + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}"),
                     Foreground = SubtleText,
                     FontSize = 11,
@@ -1469,7 +1596,7 @@ public partial class MainWindow : Window
             var bound = bindings.FirstOrDefault(b => b.Trigger == code);
             button.Background = bound is null ? defaultKeyBrush : BoundKeyBrush;
             button.FontWeight = bound is null ? FontWeights.Normal : FontWeights.SemiBold;
-            button.ToolTip = bound is null ? null : $"{bound.Macro.Name} · {ModeLabel(bound.Mode)}";
+            button.ToolTip = bound is null ? null : $"{bound.Macro.Name} · {ModeLabel(bound)}";
         }
     }
 
@@ -1561,6 +1688,7 @@ public partial class MainWindow : Window
         NameText.Visibility = Visibility.Visible;
         TriggerButton.Content = TriggerLabel(b);
         ModeBox.SelectedIndex = (int)b.Mode;
+        SyncRepeatBox(b);
 
         EventsList.Items.Clear();
         foreach (var macroEvent in b.Macro.Events)
@@ -1861,18 +1989,26 @@ public partial class MainWindow : Window
     }
 
     private static string TriggerLabel(Binding b) =>
-        b.Trigger == KeyCode.VcUndefined ? "Not set" : KeyName(b.Trigger);
+        b.MouseTrigger is { } button ? Capitalize(MouseName(button))
+        : b.Trigger == KeyCode.VcUndefined ? "Not set"
+        : KeyName(b.Trigger);
 
     private static string KeyName(KeyCode key) =>
         key.ToString().StartsWith("Vc") ? key.ToString()[2..] : key.ToString();
 
-    private static string ModeLabel(PlaybackMode mode) =>
-        mode switch
+    // Mouse names come lowercase ("mouse 4"); the keybind label sentence-cases
+    // them so they sit beside key names like "F8".
+    private static string Capitalize(string s) =>
+        s.Length == 0 ? s : char.ToUpperInvariant(s[0]) + s[1..];
+
+    private static string ModeLabel(Binding b) =>
+        b.Mode switch
         {
             PlaybackMode.Once => "once",
             PlaybackMode.WhileHeld => "while held",
             PlaybackMode.Toggle => "toggle",
-            _ => mode.ToString(),
+            PlaybackMode.Repeat => $"×{Math.Max(1, b.RepeatCount)}",
+            _ => b.Mode.ToString(),
         };
 
     protected override void OnClosing(CancelEventArgs e)
