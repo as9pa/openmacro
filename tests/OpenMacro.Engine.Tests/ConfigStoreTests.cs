@@ -139,6 +139,33 @@ public class ConfigStoreTests : IDisposable
     }
 
     [Fact]
+    public void RoundTripsMouseTrigger()
+    {
+        Binding[] bindings =
+        [
+            new(
+                KeyCode.VcUndefined,
+                new Macro("clicky", [new TextEvent("a")]),
+                PlaybackMode.Once,
+                MouseTrigger: MouseButton.Button4
+            ),
+            new(KeyCode.VcF7, new Macro("keyed", [new TextEvent("x")]), PlaybackMode.Once),
+        ];
+
+        ConfigStore.Save(bindings, path);
+
+        // The button serializes as its readable name, not a number.
+        Assert.Contains("\"Button4\"", File.ReadAllText(path));
+
+        var loaded = ConfigStore.Load(path);
+
+        Assert.NotNull(loaded);
+        Assert.Equal(MouseButton.Button4, loaded[0].MouseTrigger);
+        // Pre-mouse-trigger configs omit the property, so it must load back null.
+        Assert.Null(loaded[1].MouseTrigger);
+    }
+
+    [Fact]
     public void SavedFileUsesReadableNames()
     {
         ConfigStore.Save(
