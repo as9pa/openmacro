@@ -13,3 +13,6 @@ obj/
 
 # Local config / secrets
 appsettings.local.json
+
+# Local planning notes (not published)
+PLAN.md
