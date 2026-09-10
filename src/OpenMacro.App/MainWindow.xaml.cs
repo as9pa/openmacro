@@ -1750,12 +1750,14 @@ public partial class MainWindow : Window
             // spells the filter out instead.
             var icon = b.AppFilter is null ? null : GetAppIcon(b.AppFilter);
 
-            // Two columns, not a stack: the name takes the room the icon
-            // leaves and no more, so a long one ellipsizes at the label column
-            // instead of running under the chip — and the icon survives the
-            // trim, which it wouldn't as an inline trailing the name.
+            // Two columns, not a stack: both shrink-wrap, so the icon still
+            // sits 6 px after the name, and the name carries a MaxWidth of the
+            // label block's width less the room the icon reserves — a stack
+            // measures its children unbounded, and TextTrimming can only trim
+            // against a width. Short name: the cap never binds. Long name: the
+            // cap stops it and the ellipsis lands before the icon.
             var nameRow = new Grid();
-            nameRow.ColumnDefinitions.Add(new ColumnDefinition());
+            nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
             var name = new TextBlock
             {
@@ -1763,6 +1765,16 @@ public partial class MainWindow : Window
                 FontWeight = FontWeights.SemiBold,
                 TextTrimming = TextTrimming.CharacterEllipsis,
             };
+            name.SetBinding(
+                MaxWidthProperty,
+                new System.Windows.Data.Binding(nameof(ActualWidth))
+                {
+                    Source = labels,
+                    Converter = new SubtractConverter(),
+                    // The icon's 14 px and the 6 px that sets it off the name.
+                    ConverterParameter = icon is null ? 0d : 20d,
+                }
+            );
             // A disabled macro reads one ink step back, name and line under it.
             name.SetResourceReference(TextBlock.ForegroundProperty, b.Enabled ? "Text" : "Subtext");
             nameRow.Children.Add(name);
