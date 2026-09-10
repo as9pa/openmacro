@@ -497,14 +497,15 @@ public partial class MainWindow : Window
         // A key trigger clears any mouse trigger the binding had.
         var holder = EnabledHolderOf(key, null, i);
         bindings[i] = bindings[i] with { Trigger = key, MouseTrigger = null, Enabled = holder < 0 };
+        if (holder >= 0)
+            conflictRow = i; // the refusal marks the row's chip, as elsewhere
         SaveAndRearm();
         RefreshBindingsList(i);
         RefreshDetail();
-        Status(
-            holder < 0
-                ? $"keybind set · {KeyName(key)}"
-                : $"keybind set · {TriggerTakenBy(i, holder)}"
-        );
+        if (holder < 0)
+            Status($"keybind set · {KeyName(key)}");
+        else
+            Status($"keybind set · {TriggerTakenBy(i, holder)}", sticky: true);
     }
 
     private void MouseTriggerCaptured(MouseButton button)
@@ -522,14 +523,15 @@ public partial class MainWindow : Window
             MouseTrigger = button,
             Enabled = holder < 0,
         };
+        if (holder >= 0)
+            conflictRow = i; // same refusal, same mark
         SaveAndRearm();
         RefreshBindingsList(i);
         RefreshDetail();
-        Status(
-            holder < 0
-                ? $"keybind set · {MouseName(button)}"
-                : $"keybind set · {TriggerTakenBy(i, holder)}"
-        );
+        if (holder < 0)
+            Status($"keybind set · {MouseName(button)}");
+        else
+            Status($"keybind set · {TriggerTakenBy(i, holder)}", sticky: true);
     }
 
     // ---- binding edits ----
