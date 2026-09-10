@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -116,21 +117,17 @@ public partial class MainWindow : Window
         statusFade.Tick += (_, _) =>
         {
             statusFade.Stop();
-            var token = statusToken;
-            var fadeOut = new DoubleAnimation(0, TimeSpan.FromMilliseconds(400));
-            fadeOut.Completed += (_, _) =>
-            {
-                if (token != statusToken)
-                    return; // a newer message took the bar mid-fade
+            FadeToBaseStatus();
+        };
 
-                statusOverlaid = false;
-                SetStatusText(BaseStatus, sticky: false);
-                StatusText.BeginAnimation(
-                    OpacityProperty,
-                    new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(400))
-                );
-            };
-            StatusText.BeginAnimation(OpacityProperty, fadeOut);
+        // The Undo offer's 8 s are up: forget the delete, and hand the bar
+        // back to the base line if the offer is still the thing on it.
+        undoExpiry.Tick += (_, _) =>
+        {
+            var mine = statusToken == undoStatusToken;
+            DropUndo();
+            if (mine)
+                FadeToBaseStatus();
         };
 
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
@@ -946,10 +943,12 @@ public partial class MainWindow : Window
         if (i < 0)
             return;
 
+        var deleted = bindings[i];
         bindings.RemoveAt(i);
         SaveAndRearm();
         RefreshBindingsList(Math.Min(i, bindings.Count - 1));
         RefreshDetail();
+        OfferUndo(new Deletion(i, deleted, null), $"Deleted “{deleted.Macro.Name}”");
     }
 
     private static MenuItem MenuItemFor(string header, Action action, string? toolTip = null)
@@ -957,6 +956,102 @@ public partial class MainWindow : Window
         var item = new MenuItem { Header = header, ToolTip = toolTip };
         item.Click += (_, _) => action();
         return item;
+    }
+
+    // ---- undo (one delete deep) ----
+
+    /// <summary>What the last delete took out: a whole binding removed from
+    /// <see cref="Deletion.Index"/>, or steps lifted out of the macro at that
+    /// index, each paired with the row it sat on (ascending).</summary>
+    private sealed record Deletion(
+        int Index,
+        Binding? Binding,
+        List<(int At, MacroEvent Step)>? Steps
+    );
+
+    private Deletion? pendingUndo;
+
+    // Longer than a confirmation on purpose: 8 s is time enough to read the
+    // bar and reach for the link. The record lives exactly this long, whether
+    // or not a later message takes the link off the bar first.
+    private readonly System.Windows.Threading.DispatcherTimer undoExpiry = new()
+    {
+        Interval = TimeSpan.FromSeconds(8),
+    };
+
+    // The message the offer was written under, so the expiry only hands the
+    // bar back if the offer is still what the bar is showing.
+    private int undoStatusToken;
+
+    /// <summary>Puts "<paramref name="message"/> · Undo" over the base line
+    /// and holds <paramref name="deletion"/> for the next 8 s. The message
+    /// rides the confirmation tier, so the re-arm the delete just kicked off
+    /// waits underneath it instead of taking the bar straight back.</summary>
+    private void OfferUndo(Deletion deletion, string message)
+    {
+        SetStatusText(message, sticky: false);
+        statusOverlaid = true;
+        statusFade.Stop(); // this message runs on the 8 s clock, not the 3 s one
+
+        var undo = new Hyperlink(new Run("Undo")) { Style = (Style)FindResource("StatusLink") };
+        undo.Click += (_, _) => RestoreUndo();
+        StatusText.Inlines.Add(new Run(" · "));
+        StatusText.Inlines.Add(undo);
+
+        pendingUndo = deletion;
+        undoStatusToken = statusToken;
+        undoExpiry.Stop(); // restart the 8 s clock for this delete
+        undoExpiry.Start();
+    }
+
+    /// <summary>Forgets the pending delete: nothing left to put back.</summary>
+    private void DropUndo()
+    {
+        undoExpiry.Stop();
+        pendingUndo = null;
+    }
+
+    /// <summary>Puts the last delete back where it came from and re-selects
+    /// it. Steps go in ascending index order, so a non-contiguous selection
+    /// lands on the rows it came from rather than bunched together.</summary>
+    private void RestoreUndo()
+    {
+        if (pendingUndo is not { } undo)
+            return;
+
+        DropUndo();
+        statusOverlaid = false; // the offer is spent; the base takes the bar
+
+        if (undo.Binding is { } binding)
+        {
+            var at = Math.Min(undo.Index, bindings.Count);
+            bindings.Insert(at, binding);
+            SaveAndRearm();
+            RefreshBindingsList(at);
+            RefreshDetail();
+        }
+        else if (undo.Steps is { } steps && undo.Index < bindings.Count)
+        {
+            // Re-selecting steps only means anything while the macro they
+            // came from is the one on show.
+            if (Selected != undo.Index)
+            {
+                RefreshBindingsList(undo.Index);
+                RefreshDetail();
+            }
+
+            ReplaceEventsAt(
+                undo.Index,
+                events =>
+                {
+                    foreach (var (at, step) in steps)
+                        events.Insert(Math.Min(at, events.Count), step);
+                }
+            );
+            SelectEvents(steps.Select(step => step.At));
+        }
+
+        RefreshBaseStatus();
     }
 
     // ---- timeline edits (double-click edits in place, drag reorders,
@@ -1308,6 +1403,16 @@ public partial class MainWindow : Window
             EventsList.SelectedItems.Add(EventsList.Items[i]);
     }
 
+    /// <summary>Selects the steps at <paramref name="indices"/>, whether or
+    /// not they sit next to each other. Indices past the end are skipped.</summary>
+    private void SelectEvents(IEnumerable<int> indices)
+    {
+        EventsList.SelectedItems.Clear();
+        foreach (var i in indices)
+            if (i >= 0 && i < EventsList.Items.Count)
+                EventsList.SelectedItems.Add(EventsList.Items[i]);
+    }
+
     private List<int> SelectedEventIndices()
     {
         var indices = new List<int>();
@@ -1333,8 +1438,14 @@ public partial class MainWindow : Window
     private void DeleteSelectedEvents()
     {
         var selected = SelectedEventIndices();
-        if (selected.Count == 0)
+        var macro = Selected;
+        if (selected.Count == 0 || macro < 0)
             return;
+
+        // Read the steps before the removal, each with the row it is on: the
+        // pairs are what Undo puts back.
+        var steps = bindings[macro].Macro.Events;
+        var lifted = selected.Select(at => (At: at, Step: steps[at])).ToList();
 
         ReplaceEvents(events =>
         {
@@ -1342,6 +1453,11 @@ public partial class MainWindow : Window
                 events.RemoveAt(selected[j]);
         });
         EventsList.SelectedIndex = Math.Min(selected[0], EventsList.Items.Count - 1);
+
+        OfferUndo(
+            new Deletion(macro, null, lifted),
+            selected.Count == 1 ? "Deleted 1 step" : $"Deleted {selected.Count} steps"
+        );
     }
 
     private void AddStep_Click(object sender, RoutedEventArgs e)
@@ -1834,6 +1950,27 @@ public partial class MainWindow : Window
             statusFade.Start();
     }
 
+    /// <summary>Fades the message on the bar out and brings the base line
+    /// back in its place. The base itself never fades away.</summary>
+    private void FadeToBaseStatus()
+    {
+        var token = statusToken;
+        var fadeOut = new DoubleAnimation(0, TimeSpan.FromMilliseconds(400));
+        fadeOut.Completed += (_, _) =>
+        {
+            if (token != statusToken)
+                return; // a newer message took the bar mid-fade
+
+            statusOverlaid = false;
+            SetStatusText(BaseStatus, sticky: false);
+            StatusText.BeginAnimation(
+                OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(400))
+            );
+        };
+        StatusText.BeginAnimation(OpacityProperty, fadeOut);
+    }
+
     /// <summary>Recomputes the base line: call it wherever arm state, the live
     /// count, or recording changes. It replaces a sticky message (the state
     /// moved on, so the error is stale) but waits under a confirmation until
@@ -1857,7 +1994,7 @@ public partial class MainWindow : Window
         statusToken++;
         StatusText.BeginAnimation(OpacityProperty, null); // cancel a fade in flight
         StatusText.Opacity = 1;
-        StatusText.Text = text;
+        StatusText.Text = text; // takes an Undo link down with the old message
         StatusText.SetResourceReference(ForegroundProperty, sticky ? "Red" : "Subtext");
         UpdateLiveIndicators();
     }
@@ -1925,7 +2062,22 @@ public partial class MainWindow : Window
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (!hotkeyCapturing)
+        {
+            // Ctrl+Z takes the last delete back. Guarded like the Delete keys:
+            // inside a text box the shortcut belongs to the editor.
+            if (
+                e.Key == Key.Z
+                && Keyboard.Modifiers == ModifierKeys.Control
+                && pendingUndo is not null
+                && Keyboard.FocusedElement is not TextBox
+            )
+            {
+                RestoreUndo();
+                e.Handled = true;
+            }
+
             return;
+        }
 
         // Alt-combinations arrive as Key.System with the real key tucked away.
         var key = e.Key == Key.System ? e.SystemKey : e.Key;

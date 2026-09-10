@@ -364,6 +364,17 @@
         </Setter>
     </Style>
 
+    <!-- ================= text link ================= -->
+
+    <!-- An action that lives inside a run of text (the status bar's Undo):
+         no chrome, just the brighter ink and an underline to say it can be
+         clicked. -->
+    <Style x:Key="StatusLink" TargetType="Hyperlink">
+        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+        <Setter Property="TextDecorations" Value="Underline"/>
+        <Setter Property="Cursor" Value="Hand"/>
+    </Style>
+
     <!-- ================= checkbox ================= -->
 
     <Style TargetType="CheckBox">
