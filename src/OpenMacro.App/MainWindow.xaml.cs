@@ -30,6 +30,16 @@ public partial class MainWindow : Window
     private TaskbarIcon? tray;
     private MenuItem? trayArmItem;
 
+    // The two tray icons, swapped by UpdateTrayState. Loaded once: each one
+    // owns an icon handle, and the shell holds whichever we hand it.
+    //
+    // The on variant's dot is baked into the .ico in Theme.Default's Accent,
+    // #7C9CBF. A tray icon is a bitmap the shell keeps, not a brush the app
+    // repaints, so it cannot follow the runtime Windows accent the rest of the
+    // UI picks up: the fallback accent is the one value that always applies.
+    private readonly System.Drawing.Icon trayOffIcon = LoadTrayIcon("tray-off.ico");
+    private readonly System.Drawing.Icon trayOnIcon = LoadTrayIcon("tray-on.ico");
+
     // Binding index the "Record steps" recording appends into; -1 when idle.
     private int recordTargetIndex = -1;
 
@@ -173,6 +183,7 @@ public partial class MainWindow : Window
     {
         if (trayArmItem is not null)
             trayArmItem.IsChecked = true;
+        UpdateTrayState();
         await RearmAsync();
     }
 
@@ -180,6 +191,7 @@ public partial class MainWindow : Window
     {
         if (trayArmItem is not null)
             trayArmItem.IsChecked = false;
+        UpdateTrayState();
         await hooks.DisarmAsync();
 
         if (decliningEnable)
@@ -1178,7 +1190,7 @@ public partial class MainWindow : Window
         SaveAndRearm();
         RefreshBindingsList(Math.Min(i, bindings.Count - 1));
         RefreshDetail();
-        OfferUndo(new Deletion(i, deleted, null), $"Deleted “{deleted.Macro.Name}”");
+        OfferUndo(new Deletion(i, deleted, null, null), $"Deleted “{deleted.Macro.Name}”");
     }
 
     private static MenuItem MenuItemFor(string header, Action action, string? toolTip = null)
@@ -1194,13 +1206,19 @@ public partial class MainWindow : Window
     /// <see cref="Deletion.Binding"/>, which sat at
     /// <see cref="Deletion.Index"/>, or — when <see cref="Deletion.Steps"/> is
     /// set — those steps lifted out of that binding, each paired with the row
-    /// it sat on (ascending). The steps case keeps the binding itself rather
-    /// than trusting its index: a reorder or an edit can move it before Undo
-    /// runs, and the steps must go back into the macro they came out of.</summary>
+    /// it sat on (ascending). The steps case finds its macro again by
+    /// <see cref="Deletion.Events"/>, the step list the delete left in place,
+    /// and never by the index the steps came out of: a reorder or an edit can
+    /// move the macro before Undo runs, and the steps must go back into the
+    /// one they came out of. Every edit to a binding rewrites the record
+    /// around that same list, so the list outlives all of them; only another
+    /// edit to these very steps puts a new list there, and that withdraws the
+    /// offer (see <see cref="ReplaceEventsAt"/>).</summary>
     private sealed record Deletion(
         int Index,
         Binding Binding,
-        List<(int At, MacroEvent Step)>? Steps
+        List<(int At, MacroEvent Step)>? Steps,
+        IReadOnlyList<MacroEvent>? Events
     );
 
     private Deletion? pendingUndo;
@@ -1281,12 +1299,15 @@ public partial class MainWindow : Window
             RefreshBindingsList(at);
             RefreshDetail();
         }
-        else if (bindings.IndexOf(undo.Binding) is var macro && macro >= 0)
+        else if (
+            bindings.FindIndex(b => ReferenceEquals(b.Macro.Events, undo.Events)) is var macro
+            && macro >= 0
+        )
         {
-            // The macro is found by value, never by the index the steps came
-            // out of: a reorder or an edit can have put a different macro
-            // there, and the steps would land in its timeline. Gone means
-            // gone, and re-selecting them only means anything while the macro
+            // The macro is found by the step list it holds, never by the
+            // index the steps came out of: a reorder or an edit can have put
+            // a different macro there, and the steps would land in its
+            // timeline. Re-selecting them only means anything while the macro
             // they came from is the one on show.
             if (Selected != macro)
             {
@@ -1300,9 +1321,17 @@ public partial class MainWindow : Window
                 {
                     foreach (var (at, step) in steps)
                         events.Insert(Math.Min(at, events.Count), step);
-                }
+                },
+                keepUndo: true // the offer is being spent here, not outrun
             );
             SelectEvents(steps.Select(step => step.At));
+        }
+        else
+        {
+            // Out of reach while the list instance holds, since anything that
+            // replaces it withdraws the offer first. Kept so a path that ever
+            // does lose it says so instead of dropping the steps in silence.
+            Status("nothing to undo");
         }
 
         RefreshBaseStatus();
@@ -1732,10 +1761,11 @@ public partial class MainWindow : Window
         });
         EventsList.SelectedIndex = Math.Min(selected[0], StepRowCount - 1);
 
-        // The binding as it stands after the removal: Undo looks it up by
-        // value, so the sidebar may be in a different order by then.
+        // The step list as it stands after the removal: Undo looks the macro
+        // up by it, so the sidebar may be in a different order, and the
+        // binding may have been edited, by then.
         OfferUndo(
-            new Deletion(macro, bindings[macro], lifted),
+            new Deletion(macro, bindings[macro], lifted, bindings[macro].Macro.Events),
             selected.Count == 1 ? "Deleted 1 step" : $"Deleted {selected.Count} steps"
         );
     }
@@ -1966,12 +1996,19 @@ public partial class MainWindow : Window
     /// <summary>
     /// Mutates a specific binding's steps — the target is an index, not the
     /// selection, so "Record steps" still lands in the right macro if the
-    /// selection changed while recording.
+    /// selection changed while recording. Every edit here puts a new list in
+    /// place of the old one, so a pending step Undo loses the macro it was
+    /// going back into: the offer goes with the steps it recorded, unless
+    /// <paramref name="keepUndo"/> says this edit is that Undo putting them
+    /// back.
     /// </summary>
-    private void ReplaceEventsAt(int i, Action<List<MacroEvent>> mutate)
+    private void ReplaceEventsAt(int i, Action<List<MacroEvent>> mutate, bool keepUndo = false)
     {
         if (i < 0 || i >= bindings.Count)
             return;
+
+        if (!keepUndo)
+            CancelUndoOffer();
 
         var events = bindings[i].Macro.Events.ToList();
         mutate(events);
@@ -2234,14 +2271,49 @@ public partial class MainWindow : Window
         menu.Items.Add(new Separator());
         menu.Items.Add(exit);
 
-        tray = new TaskbarIcon
-        {
-            ToolTipText = "openmacro",
-            Icon = System.Drawing.SystemIcons.Application,
-            ContextMenu = menu,
-        };
+        tray = new TaskbarIcon { ContextMenu = menu };
         tray.TrayLeftMouseUp += (_, _) => RestoreFromTray();
+        UpdateTrayState(); // off at startup; every arm change re-runs it
     }
+
+    /// <summary>Puts the tray icon and its tooltip on the arm state. Both
+    /// <see cref="ArmToggle_Checked"/> and <see cref="ArmToggle_Unchecked"/>
+    /// call it, and every way of arming routes through those two (the switch,
+    /// the tray menu item, the global hotkey), so the tray reads right even
+    /// while the window is hidden and it is the only readout left.</summary>
+    private void UpdateTrayState()
+    {
+        if (tray is null)
+            return;
+
+        var on = ArmToggle.IsChecked == true;
+        tray.Icon = on ? trayOnIcon : trayOffIcon;
+        tray.ToolTipText = on ? "openmacro · on" : "openmacro · off";
+    }
+
+    /// <summary>Loads one of the two tray icons at the size the shell draws
+    /// the tray at. The .ico carries a 16 px and a 32 px frame and the shell
+    /// takes a single bitmap, so the frame has to be picked here: asking for
+    /// the small-icon metric gets the crisp one rather than a downscale of
+    /// the other.</summary>
+    private static System.Drawing.Icon LoadTrayIcon(string file)
+    {
+        using var stream = Application
+            .GetResourceStream(new Uri($"Assets/{file}", UriKind.Relative))
+            .Stream;
+        return new System.Drawing.Icon(
+            stream,
+            GetSystemMetrics(SmCxSmIcon),
+            GetSystemMetrics(SmCySmIcon)
+        );
+    }
+
+    // Tray icon width and height, in the shell's own DPI.
+    private const int SmCxSmIcon = 49;
+    private const int SmCySmIcon = 50;
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
 
     private void RestoreFromTray()
     {
@@ -2929,6 +3001,8 @@ public partial class MainWindow : Window
         if (windowHandle != 0)
             UnregisterHotKey(windowHandle, ArmHotkeyId);
         tray?.Dispose();
+        trayOffIcon.Dispose(); // the tray is gone, so the handles can go too
+        trayOnIcon.Dispose();
         hooks.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
         base.OnClosing(e);
     }
