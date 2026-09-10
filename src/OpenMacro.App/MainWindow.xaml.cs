@@ -238,11 +238,17 @@ public partial class MainWindow : Window
     private void SaveAndRearm()
     {
         ConfigStore.Save(bindings);
-        if (ArmToggle.IsChecked == true)
-            _ = RearmAsync();
 
-        // The edit is a user action: the live count may have moved and any
-        // sticky error is now stale.
+        // Re-arming recomputes the base itself once the hook is live, or lands
+        // the "no macros enabled" refusal; either way it owns the bar from here.
+        if (ArmToggle.IsChecked == true)
+        {
+            _ = RearmAsync();
+            return;
+        }
+
+        // Nothing to re-arm, but the edit is still a user action: the base
+        // line takes the bar back from a stale sticky error.
         RefreshBaseStatus();
     }
 
@@ -659,7 +665,7 @@ public partial class MainWindow : Window
             check.IsChecked = false;
             refreshing = false;
             Status(
-                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}",
+                $"uncheck {bindings[holder].Macro.Name} first · both use {TriggerLabel(bindings[i])}",
                 sticky: true
             );
             return;
@@ -883,7 +889,7 @@ public partial class MainWindow : Window
         if (holder >= 0)
         {
             Status(
-                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}",
+                $"uncheck {bindings[holder].Macro.Name} first · both use {TriggerLabel(bindings[i])}",
                 sticky: true
             );
             return;
@@ -1193,7 +1199,7 @@ public partial class MainWindow : Window
                                     ReplaceSelectedStep(
                                         new DelayEvent(d.Milliseconds, infinite: true)
                                     ),
-                                "Waits until the macro is stopped — keybind released (While held) or pressed again (Toggle)"
+                                "Waits until the macro is stopped · keybind released (While held) or pressed again (Toggle)"
                             )
                     );
                     break;
@@ -1968,7 +1974,7 @@ public partial class MainWindow : Window
             else
             {
                 Status(
-                    $"couldn't register {HotkeyLabel(key, modifiers)} — another app may own it",
+                    $"couldn't register {HotkeyLabel(key, modifiers)} · another app may own it",
                     sticky: true
                 );
                 armHotkeyKey = Key.None;
@@ -2062,7 +2068,7 @@ public partial class MainWindow : Window
         if (armHotkeyKey != Key.None && !TryRegisterArmHotkey())
         {
             Status(
-                $"couldn't register {HotkeyLabel(armHotkeyKey, armHotkeyModifiers)} — another app may own it",
+                $"couldn't register {HotkeyLabel(armHotkeyKey, armHotkeyModifiers)} · another app may own it",
                 sticky: true
             );
             armHotkeyKey = Key.None;
