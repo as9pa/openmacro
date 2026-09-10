@@ -1743,31 +1743,44 @@ public partial class MainWindow : Window
             check.Unchecked += EnabledChanged;
 
             // The label block takes what the checkbox and the keybind leave.
-            // It clips: the keybind owns the right edge, so an over-long name
-            // stops at the label column instead of running under the chip.
-            var labels = new StackPanel { Margin = new Thickness(8, 2, 0, 2), ClipToBounds = true };
+            var labels = new StackPanel { Margin = new Thickness(8, 2, 0, 2) };
 
             // App-filtered macros carry the app's icon next to the name; when
             // the icon can't be resolved (app not running), the subtitle
             // spells the filter out instead.
             var icon = b.AppFilter is null ? null : GetAppIcon(b.AppFilter);
-            var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
-            var name = new TextBlock { Text = b.Macro.Name, FontWeight = FontWeights.SemiBold };
+
+            // Two columns, not a stack: the name takes the room the icon
+            // leaves and no more, so a long one ellipsizes at the label column
+            // instead of running under the chip — and the icon survives the
+            // trim, which it wouldn't as an inline trailing the name.
+            var nameRow = new Grid();
+            nameRow.ColumnDefinitions.Add(new ColumnDefinition());
+            nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var name = new TextBlock
+            {
+                Text = b.Macro.Name,
+                FontWeight = FontWeights.SemiBold,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
             // A disabled macro reads one ink step back, name and line under it.
             name.SetResourceReference(TextBlock.ForegroundProperty, b.Enabled ? "Text" : "Subtext");
             nameRow.Children.Add(name);
             if (icon is not null)
-                nameRow.Children.Add(
-                    new Image
-                    {
-                        Source = icon,
-                        Width = 14,
-                        Height = 14,
-                        Margin = new Thickness(6, 0, 0, 0),
-                        VerticalAlignment = VerticalAlignment.Center,
-                        ToolTip = $"only in {b.AppFilter}",
-                    }
-                );
+            {
+                var badge = new Image
+                {
+                    Source = icon,
+                    Width = 14,
+                    Height = 14,
+                    Margin = new Thickness(6, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    ToolTip = $"only in {b.AppFilter}",
+                };
+                Grid.SetColumn(badge, 1);
+                nameRow.Children.Add(badge);
+            }
+
             labels.Children.Add(nameRow);
 
             // The keybind has moved to the chip, so the line under the name
