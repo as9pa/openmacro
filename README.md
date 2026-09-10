@@ -30,8 +30,8 @@ requires windows x64.
 
 | [releases](https://github.com/as9pa/openmacro/releases) | size | needs .NET? |
 |---|---|---|
-| `openmacro-v0.1.0-win-x64.exe` | ~72 mb | **no** — built in runtime |
-| `openmacro-v0.1.0-win-x64-dotnet.zip` | ~510 kb | **yes** — [.NET 10 desktop runtime](https://dotnet.microsoft.com/en-us/download) |
+| `openmacro-v0.2.0-win-x64.exe` | ~72 mb | **no** — built in runtime |
+| `openmacro-v0.2.0-win-x64-dotnet.zip` | ~510 kb | **yes** — [.NET 10 desktop runtime](https://dotnet.microsoft.com/en-us/download) |
 
 if you dont have dotnet download the `.exe`
 
