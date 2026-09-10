@@ -244,11 +244,15 @@
                                   SelectionChanged="AppBox_SelectionChanged">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate>
-                                    <!-- A DockPanel, not a stack: the name has to
-                                         measure against the width that is left, or
-                                         a long process name clips instead of
-                                         ellipsizing. -->
-                                    <DockPanel>
+                                    <!-- A DockPanel, not a stack: the icon and
+                                         the qualifier take their width first, so
+                                         the name measures against what is left
+                                         and ellipsizes into it instead of
+                                         clipping. It shrink-wraps, so in the
+                                         drop-down, where the rows are as wide as
+                                         the widest, the qualifier still follows
+                                         the name instead of the row's edge. -->
+                                    <DockPanel HorizontalAlignment="Left">
                                         <Image DockPanel.Dock="Left"
                                                Width="14" Height="14" Margin="0,0,6,0"
                                                VerticalAlignment="Center"
@@ -267,7 +271,14 @@
                                                 </Style>
                                             </Image.Style>
                                         </Image>
-                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
+                                        <!-- Docked, so "(not running)" is not
+                                             what a long name pushes out of the
+                                             closed box: it is the reason the row
+                                             is in the list at all. -->
+                                        <TextBlock DockPanel.Dock="Right"
+                                                   Text="{Binding Suffix}"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis"/>
                                     </DockPanel>
                                 </DataTemplate>
@@ -275,6 +286,9 @@
                             <ComboBox.ItemContainerStyle>
                                 <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
                                     <Setter Property="AutomationProperties.Name" Value="{Binding Label}"/>
+                                    <!-- Both halves, for the row whose name the
+                                         list is too narrow to spell out. -->
+                                    <Setter Property="ToolTip" Value="{Binding Label}"/>
                                 </Style>
                             </ComboBox.ItemContainerStyle>
                         </ComboBox>

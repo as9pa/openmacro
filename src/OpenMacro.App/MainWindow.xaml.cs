@@ -995,11 +995,19 @@ public partial class MainWindow : Window
     }
 
     /// <summary>One row of the header's App box: the filter it writes (null is
-    /// "Anywhere"), the text it shows, and the app's icon when there is
-    /// one.</summary>
-    private sealed record AppChoice(string? App, string Label, ImageSource? Icon);
+    /// "Anywhere"), the name it shows, the qualifier that follows the name
+    /// (empty for every row but an app that isn't running), and the app's icon
+    /// when there is one. The two halves are kept apart because the closed box
+    /// is 150 px and a process name can outrun it: the name is the half that
+    /// gives way.</summary>
+    private sealed record AppChoice(string? App, string Name, string Suffix, ImageSource? Icon)
+    {
+        /// <summary>Both halves as one line: what type-ahead matches, what the
+        /// tooltip reads, and what a screen reader is given.</summary>
+        public string Label => Name + Suffix;
+    }
 
-    private static readonly AppChoice anywhere = new(null, "Anywhere", null);
+    private static readonly AppChoice anywhere = new(null, "Anywhere", "", null);
 
     /// <summary>What the closed box has to read before it is ever opened:
     /// "Anywhere" and, when this binding is filtered, the app it is filtered
@@ -1010,7 +1018,7 @@ public partial class MainWindow : Window
         AppBox.Items.Clear();
         AppBox.Items.Add(anywhere);
         if (b.AppFilter is { } app)
-            AppBox.Items.Add(new AppChoice(app, app, GetAppIcon(app)));
+            AppBox.Items.Add(new AppChoice(app, app, "", GetAppIcon(app)));
         AppBox.SelectedIndex = b.AppFilter is null ? 0 : 1;
     }
 
@@ -1029,14 +1037,14 @@ public partial class MainWindow : Window
         var listed = false;
         foreach (var (name, _) in RunningApps())
         {
-            choices.Add(new AppChoice(name, name, GetAppIcon(name)));
+            choices.Add(new AppChoice(name, name, "", GetAppIcon(name)));
             listed = string.Equals(current, name, StringComparison.OrdinalIgnoreCase) || listed;
         }
 
         // Not running right now: still listed, so the filter is visible and
         // stays selected. The icon can still come back from the disk cache.
         if (current is not null && !listed)
-            choices.Add(new AppChoice(current, $"{current} (not running)", GetAppIcon(current)));
+            choices.Add(new AppChoice(current, current, " (not running)", GetAppIcon(current)));
 
         refreshing = true; // rebuilding the list is not a user edit
         AppBox.Items.Clear();
