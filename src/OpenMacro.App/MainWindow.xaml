@@ -236,7 +236,7 @@
                              list, and one visual cannot be in both places. The
                              list itself is built when the drop-down opens (see
                              AppBox_DropDownOpened). -->
-                        <ComboBox x:Name="AppBox" Width="150" Margin="6,0,0,0"
+                        <ComboBox x:Name="AppBox" Width="220" Margin="6,0,0,0"
                                   VerticalContentAlignment="Center"
                                   TextSearch.TextPath="Label"
                                   ToolTip="Limit this macro to one app · elsewhere the keybind types normally"
@@ -274,9 +274,12 @@
                                         <!-- Docked, so "(not running)" is not
                                              what a long name pushes out of the
                                              closed box: it is the reason the row
-                                             is in the list at all. -->
+                                             is in the list at all. In Overlay0,
+                                             because it is the app's state and
+                                             not part of its name. -->
                                         <TextBlock DockPanel.Dock="Right"
                                                    Text="{Binding Suffix}"
+                                                   Foreground="{DynamicResource Overlay0}"
                                                    VerticalAlignment="Center"/>
                                         <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis"/>
