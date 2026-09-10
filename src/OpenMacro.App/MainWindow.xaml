@@ -34,8 +34,16 @@
                                    VerticalAlignment="Center"/>
                         <Button x:Name="HotkeyButton" Margin="6,0,0,0"
                                 Style="{StaticResource GhostButton}"
-                                ToolTip="Global hotkey that toggles Enable. Works while the app is in the tray · click, then press a key · Esc clears"
+                                ToolTip="Global hotkey that toggles Enable. Works while the app is in the tray · click, then press a key · Esc cancels · right-click to clear"
                                 Click="HotkeyButton_Click">
+                            <Button.ContextMenu>
+                                <!-- The hotkey's only way out, now that Esc
+                                     cancels the capture instead of clearing. -->
+                                <ContextMenu>
+                                    <MenuItem x:Name="ClearHotkeyItem" Header="Clear hotkey"
+                                              Click="ClearHotkey_Click"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
                             <ContentControl x:Name="HotkeyChip" Style="{StaticResource KeyChip}"/>
                         </Button>
                     </StackPanel>

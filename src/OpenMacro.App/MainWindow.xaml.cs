@@ -333,8 +333,9 @@ public partial class MainWindow : Window
     /// <summary>The trigger-capture counterpart of <see cref="CaptureKeyWithOverlay"/>:
     /// a key or a mouse button (not left click, not a scroll — the hook filters
     /// those out) sets the keybind. Esc reaches <paramref name="onInput"/> as a
-    /// key like any other — the flow reads it as "unassign". Clicking the scrim
-    /// (left click) cancels. <paramref name="onInput"/> runs on the UI thread.</summary>
+    /// key like any other, and the flow reads it as "cancel". Clicking the
+    /// scrim (left click) cancels too. <paramref name="onInput"/> runs on the
+    /// UI thread.</summary>
     private void CaptureTriggerWithOverlay(
         string prompt,
         string hint,
@@ -447,10 +448,10 @@ public partial class MainWindow : Window
         if (Selected < 0)
             return;
 
-        Status("press a key or mouse button · Esc clears");
+        Status("press a key or mouse button · Esc cancels");
         CaptureTriggerWithOverlay(
             "press a key or mouse button to set the keybind",
-            "Esc clears the keybind · left click is reserved",
+            "Esc cancels · left click is reserved",
             input =>
             {
                 switch (input)
@@ -475,20 +476,12 @@ public partial class MainWindow : Window
         if (i < 0)
             return;
 
-        // Esc is reserved as "unassign", so it can never be a trigger itself —
-        // clear the key trigger and any mouse trigger together.
+        // Esc is reserved as "never mind", so it can never be a trigger
+        // itself. The binding keeps the keybind it already had; unassigning
+        // is the menu's "Clear keybind" (see ClearSelectedKeybind).
         if (key == KeyCode.VcEscape)
         {
-            bindings[i] = bindings[i] with
-            {
-                Trigger = KeyCode.VcUndefined,
-                MouseTrigger = null,
-                Enabled = false,
-            };
-            SaveAndRearm();
-            RefreshBindingsList(i);
-            RefreshDetail();
-            Status("keybind cleared");
+            Status("cancelled");
             return;
         }
 
@@ -1984,7 +1977,7 @@ public partial class MainWindow : Window
                 },
                 Margin = new Thickness(8, 0, 0, 0),
                 VerticalAlignment = VerticalAlignment.Center,
-                ToolTip = "Click, then press a key · Esc clears",
+                ToolTip = "Click, then press a key · Esc cancels",
                 Tag = i,
             };
 
@@ -2390,10 +2383,10 @@ public partial class MainWindow : Window
         // now), not via the global hook — no KeyCode→virtual-key mapping, and
         // no hook while disarmed.
         CapturePrompt.Text = "press a key to toggle Enable globally";
-        CaptureHint.Text = "modifiers count (e.g. Ctrl+F6) · Esc clears · click to cancel";
+        CaptureHint.Text = "modifiers count (e.g. Ctrl+F6) · Esc or a click cancels";
         hotkeyCapturing = true;
         ShowCaptureOverlay();
-        Status("press a key for the Enable hotkey · Esc clears");
+        Status("press a key for the Enable hotkey · Esc cancels");
     }
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -2434,16 +2427,25 @@ public partial class MainWindow : Window
         e.Handled = true;
         hotkeyCapturing = false;
 
+        // The hotkey that was registered stays registered; unassigning is the
+        // button's own "Clear hotkey" (see ClearHotkey_Click).
         if (key == Key.Escape)
         {
             DismissCaptureOverlay(null);
-            ApplyArmHotkey(Key.None, ModifierKeys.None);
-            Status("hotkey cleared");
+            Status("cancelled");
             return;
         }
 
         DismissCaptureOverlay(HotkeyLabel(key, Keyboard.Modifiers));
         ApplyArmHotkey(key, Keyboard.Modifiers);
+    }
+
+    /// <summary>"Clear hotkey", off the button's right-click: Enable loses its
+    /// global key and can only be flipped from the window or the tray.</summary>
+    private void ClearHotkey_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyArmHotkey(Key.None, ModifierKeys.None);
+        Status("hotkey cleared");
     }
 
     private void ApplyArmHotkey(Key key, ModifierKeys modifiers)
@@ -2521,6 +2523,7 @@ public partial class MainWindow : Window
         var hasHotkey = armHotkeyKey != Key.None;
         HotkeyChip.Content = hasHotkey ? HotkeyLabel(armHotkeyKey, armHotkeyModifiers) : "set";
         HotkeyChip.Style = (Style)FindResource(hasHotkey ? "KeyChip" : "KeyChipUnset");
+        ClearHotkeyItem.IsEnabled = hasHotkey; // nothing to clear without one
     }
 
     private nint HotkeyWndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
