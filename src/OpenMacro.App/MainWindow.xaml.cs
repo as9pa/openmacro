@@ -2,6 +2,7 @@ using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
 using System.Windows.Media;
@@ -52,6 +53,10 @@ public partial class MainWindow : Window
             blocksDrag: Rows.IsWithin<TextBox>,
             commit: (sources, to) =>
             {
+                // A reorder renumbers the rows a pending Undo record points
+                // at, so the offer goes with the old order.
+                CancelUndoOffer();
+
                 // The list already shows the final order; commit it to the
                 // model: pull the dragged steps out (sources are pre-drag
                 // indices, ascending) and reinsert them as one block.
@@ -66,6 +71,8 @@ public partial class MainWindow : Window
             },
             cancel: sources =>
             {
+                CancelUndoOffer();
+
                 // Rebuild to restore the model's order and clear ghosting.
                 RefreshDetail();
                 foreach (var i in sources)
@@ -81,6 +88,8 @@ public partial class MainWindow : Window
             // Single-select list: the block is always exactly one row.
             commit: (sources, to) =>
             {
+                CancelUndoOffer();
+
                 var moved = bindings[sources[0]];
                 bindings.RemoveAt(sources[0]);
                 bindings.Insert(to, moved);
@@ -90,6 +99,7 @@ public partial class MainWindow : Window
             },
             cancel: sources =>
             {
+                CancelUndoOffer();
                 RefreshBindingsList(sources.Length > 0 ? sources[0] : -1);
                 RefreshDetail();
             }
@@ -111,17 +121,21 @@ public partial class MainWindow : Window
         (armHotkeyKey, armHotkeyModifiers) = ParseHotkey(settings);
         UpdateHotkeyButton();
 
+        // A confirmation's 3 s are up: fade it out, then bring the base line
+        // back in its place. The base itself never fades away.
         statusFade.Tick += (_, _) =>
         {
             statusFade.Stop();
-            StatusText.BeginAnimation(
-                OpacityProperty,
-                new DoubleAnimation(0, TimeSpan.FromMilliseconds(400))
-            );
+            FadeToBaseStatus();
         };
+
+        // The Undo offer's 8 s are up: same ending as any other way it
+        // stops being offered.
+        undoExpiry.Tick += (_, _) => CancelUndoOffer();
 
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
+        RefreshBaseStatus(); // the bar opens on the base line, never blank
     }
 
     private sealed record ScreenRect(double Left, double Top, double Right, double Bottom);
@@ -145,7 +159,7 @@ public partial class MainWindow : Window
     // ---- arming ----
 
     // Set when Enable is refused (nothing to arm) so the resulting Unchecked
-    // reports "no macros enabled" instead of "disabled".
+    // reports "no macros enabled" instead of falling back to the base line.
     private bool decliningEnable;
 
     private async void ArmToggle_Checked(object sender, RoutedEventArgs e)
@@ -164,11 +178,11 @@ public partial class MainWindow : Window
         if (decliningEnable)
         {
             decliningEnable = false;
-            Status("no macros enabled");
+            Status("no macros enabled", sticky: true);
         }
         else
         {
-            Status("disabled");
+            RefreshBaseStatus(); // the base line already reads Off
         }
     }
 
@@ -218,20 +232,32 @@ public partial class MainWindow : Window
         }
 
         await hooks.ArmAsync(armable);
-        Status($"enabled · {armable.Length} {(armable.Length == 1 ? "macro" : "macros")} live");
+        RefreshBaseStatus(); // the base line counts what just went live
     }
 
     private void SaveAndRearm()
     {
         ConfigStore.Save(bindings);
+
+        // Re-arming recomputes the base itself once the hook is live, or lands
+        // the "no macros enabled" refusal; either way it owns the bar from here.
         if (ArmToggle.IsChecked == true)
+        {
             _ = RearmAsync();
+            return;
+        }
+
+        // Nothing to re-arm, but the edit is still a user action: the base
+        // line takes the bar back from a stale sticky error.
+        RefreshBaseStatus();
     }
 
     // ---- new macro ----
 
     private void AddMacro_Click(object sender, RoutedEventArgs e)
     {
+        CancelUndoOffer(); // a new row changes the shape the offer recorded
+
         // Starts trigger-less and disabled; record or insert steps next.
         bindings.Add(
             new Binding(
@@ -474,7 +500,7 @@ public partial class MainWindow : Window
         Status(
             holder < 0
                 ? $"keybind set · {KeyName(key)}"
-                : $"keybind set · uncheck {bindings[holder].Macro.Name} to enable this one"
+                : $"keybind set · {TriggerTakenBy(i, holder)}"
         );
     }
 
@@ -499,7 +525,7 @@ public partial class MainWindow : Window
         Status(
             holder < 0
                 ? $"keybind set · {MouseName(button)}"
-                : $"keybind set · uncheck {bindings[holder].Macro.Name} to enable this one"
+                : $"keybind set · {TriggerTakenBy(i, holder)}"
         );
     }
 
@@ -511,7 +537,10 @@ public partial class MainWindow : Window
         // the detail panel must keep showing the grabbed binding until the
         // drop commits the model.
         if (!refreshing && bindingsReorder is not { IsReordering: true })
+        {
             RefreshDetail();
+            RefreshBaseStatus(); // a new selection clears a stale conflict
+        }
     }
 
     // ---- rename (the name heading edits in place on click) ----
@@ -609,6 +638,7 @@ public partial class MainWindow : Window
         if (!int.TryParse(RepeatBox.Text, out var count) || count < 1 || count > 100_000)
         {
             RepeatBox.Text = Math.Max(1, bindings[i].RepeatCount).ToString();
+            FlashRepeatBox();
             return;
         }
 
@@ -620,6 +650,52 @@ public partial class MainWindow : Window
         RefreshBindingsList(i);
     }
 
+    // The Tag the TextBox template's last trigger watches for: while it is
+    // set, the box's chrome takes the control's own BorderBrush, so the flash
+    // below shows over the hover and focus borders (see Theme.xaml).
+    private const string RejectedTag = "Rejected";
+
+    // One brush and one token for the flash: a second rejection inside the
+    // 600 ms restarts the settle, and only the newest one puts the resting
+    // border back.
+    private readonly SolidColorBrush repeatFlash = new();
+    private int repeatFlashToken;
+
+    /// <summary>The refusal, said without a message: the box's border lights
+    /// Red and settles back over 600 ms — onto the focus accent while the box
+    /// still has focus (the Enter path), onto the resting hairline once it
+    /// does not (the blur path), so the flash never ends in a jump. The
+    /// resting value goes back as a resource reference, so a theme swap still
+    /// repaints it.</summary>
+    private void FlashRepeatBox()
+    {
+        var token = ++repeatFlashToken;
+
+        repeatFlash.BeginAnimation(SolidColorBrush.ColorProperty, null); // stop a flash in flight
+        repeatFlash.Color = ThemeManager.Color("Red");
+        RepeatBox.BorderBrush = repeatFlash;
+        RepeatBox.Tag = RejectedTag;
+
+        var settle = new ColorAnimation(
+            ThemeManager.Color(RepeatBox.IsKeyboardFocusWithin ? "Accent" : "Hairline"),
+            TimeSpan.FromMilliseconds(600)
+        );
+        settle.Completed += (_, _) =>
+        {
+            if (token != repeatFlashToken)
+                return; // a newer flash owns the border
+
+            RepeatBox.ClearValue(TagProperty);
+            RepeatBox.SetResourceReference(BorderBrushProperty, "Hairline");
+        };
+        repeatFlash.BeginAnimation(SolidColorBrush.ColorProperty, settle);
+    }
+
+    // Row whose enable was just refused: its trigger reads Red until the list
+    // is next rebuilt. Task 5 moves the mark onto the row's key chip; the flag
+    // is what stays put.
+    private int conflictRow = -1;
+
     private void EnabledChanged(object sender, RoutedEventArgs e)
     {
         if (refreshing || sender is not CheckBox { Tag: int i } check)
@@ -628,7 +704,7 @@ public partial class MainWindow : Window
         var enable = check.IsChecked == true;
 
         // Shared keybind: only one holder may be enabled — bounce the check
-        // back off and point at the one to uncheck first.
+        // back off, mark the row, and name the macro already holding it.
         var holder = enable
             ? EnabledHolderOf(bindings[i].Trigger, bindings[i].MouseTrigger, i)
             : -1;
@@ -637,15 +713,21 @@ public partial class MainWindow : Window
             refreshing = true; // reverting the box is not a user edit
             check.IsChecked = false;
             refreshing = false;
-            Status(
-                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}"
-            );
+            conflictRow = i;
+            RefreshBindingsList(Selected); // stamps the mark on the refused row
+            Status(TriggerTakenBy(i, holder), sticky: true);
             return;
         }
 
         bindings[i] = bindings[i] with { Enabled = enable };
         SaveAndRearm();
     }
+
+    /// <summary>The shared-keybind refusal, in the one wording every path
+    /// that refuses an enable uses: the trigger, then the macro already
+    /// holding it.</summary>
+    private string TriggerTakenBy(int refused, int holder) =>
+        $"{TriggerLabel(bindings[refused])} is already used by {bindings[holder].Macro.Name}";
 
     private void BindingsList_RightClick(object sender, MouseButtonEventArgs e)
     {
@@ -860,9 +942,11 @@ public partial class MainWindow : Window
             : -1;
         if (holder >= 0)
         {
-            Status(
-                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}"
-            );
+            // Same refusal as the checkbox path, so the same mark and the
+            // same message.
+            conflictRow = i;
+            RefreshBindingsList(Selected);
+            Status(TriggerTakenBy(i, holder), sticky: true);
             return;
         }
 
@@ -896,6 +980,8 @@ public partial class MainWindow : Window
         if (i < 0)
             return;
 
+        CancelUndoOffer(); // the copy pushes every row below it down one
+
         // The copy keeps the keybind (sharing is allowed) but starts
         // unchecked — only one holder of a key may be enabled at a time.
         var copy = bindings[i] with
@@ -917,10 +1003,12 @@ public partial class MainWindow : Window
         if (i < 0)
             return;
 
+        var deleted = bindings[i];
         bindings.RemoveAt(i);
         SaveAndRearm();
         RefreshBindingsList(Math.Min(i, bindings.Count - 1));
         RefreshDetail();
+        OfferUndo(new Deletion(i, deleted, null), $"Deleted “{deleted.Macro.Name}”");
     }
 
     private static MenuItem MenuItemFor(string header, Action action, string? toolTip = null)
@@ -928,6 +1016,124 @@ public partial class MainWindow : Window
         var item = new MenuItem { Header = header, ToolTip = toolTip };
         item.Click += (_, _) => action();
         return item;
+    }
+
+    // ---- undo (one delete deep) ----
+
+    /// <summary>What the last delete took out: the whole
+    /// <see cref="Deletion.Binding"/>, which sat at
+    /// <see cref="Deletion.Index"/>, or — when <see cref="Deletion.Steps"/> is
+    /// set — those steps lifted out of that binding, each paired with the row
+    /// it sat on (ascending). The steps case keeps the binding itself rather
+    /// than trusting its index: a reorder or an edit can move it before Undo
+    /// runs, and the steps must go back into the macro they came out of.</summary>
+    private sealed record Deletion(
+        int Index,
+        Binding Binding,
+        List<(int At, MacroEvent Step)>? Steps
+    );
+
+    private Deletion? pendingUndo;
+
+    // Longer than a confirmation on purpose: 8 s is time enough to read the
+    // bar and reach for the link. The record lives exactly this long, whether
+    // or not a later message takes the link off the bar first.
+    private readonly System.Windows.Threading.DispatcherTimer undoExpiry = new()
+    {
+        Interval = TimeSpan.FromSeconds(8),
+    };
+
+    // The message the offer was written under, so the expiry only hands the
+    // bar back if the offer is still what the bar is showing.
+    private int undoStatusToken;
+
+    /// <summary>Puts "<paramref name="message"/> · Undo" over the base line
+    /// and holds <paramref name="deletion"/> for the next 8 s. The message
+    /// rides the confirmation tier, so the re-arm the delete just kicked off
+    /// waits underneath it instead of taking the bar straight back.</summary>
+    private void OfferUndo(Deletion deletion, string message)
+    {
+        SetStatusText(message, sticky: false);
+        statusOverlaid = true;
+        statusFade.Stop(); // this message runs on the 8 s clock, not the 3 s one
+
+        var undo = new Hyperlink(new Run("Undo")) { Style = (Style)FindResource("StatusLink") };
+        undo.Click += (_, _) => RestoreUndo();
+        StatusText.Inlines.Add(new Run(" · "));
+        StatusText.Inlines.Add(undo);
+
+        pendingUndo = deletion;
+        undoStatusToken = statusToken;
+        undoExpiry.Stop(); // restart the 8 s clock for this delete
+        undoExpiry.Start();
+    }
+
+    /// <summary>Forgets the pending delete: nothing left to put back.</summary>
+    private void DropUndo()
+    {
+        undoExpiry.Stop();
+        pendingUndo = null;
+    }
+
+    /// <summary>Withdraws the offer: forgets the delete and, if the offer is
+    /// still what the bar is showing, fades the message back to the base line.
+    /// The 8 s expiry ends this way, and so does anything that renumbers the
+    /// rows the record points at.</summary>
+    private void CancelUndoOffer()
+    {
+        if (pendingUndo is null)
+            return;
+
+        var showing = statusToken == undoStatusToken;
+        DropUndo();
+        if (showing)
+            FadeToBaseStatus();
+    }
+
+    /// <summary>Puts the last delete back where it came from and re-selects
+    /// it. Steps go in ascending index order, so a non-contiguous selection
+    /// lands on the rows it came from rather than bunched together.</summary>
+    private void RestoreUndo()
+    {
+        if (pendingUndo is not { } undo)
+            return;
+
+        DropUndo();
+        statusOverlaid = false; // the offer is spent; the base takes the bar
+
+        if (undo.Steps is not { } steps)
+        {
+            var at = Math.Min(undo.Index, bindings.Count);
+            bindings.Insert(at, undo.Binding);
+            SaveAndRearm();
+            RefreshBindingsList(at);
+            RefreshDetail();
+        }
+        else if (bindings.IndexOf(undo.Binding) is var macro && macro >= 0)
+        {
+            // The macro is found by value, never by the index the steps came
+            // out of: a reorder or an edit can have put a different macro
+            // there, and the steps would land in its timeline. Gone means
+            // gone, and re-selecting them only means anything while the macro
+            // they came from is the one on show.
+            if (Selected != macro)
+            {
+                RefreshBindingsList(macro);
+                RefreshDetail();
+            }
+
+            ReplaceEventsAt(
+                macro,
+                events =>
+                {
+                    foreach (var (at, step) in steps)
+                        events.Insert(Math.Min(at, events.Count), step);
+                }
+            );
+            SelectEvents(steps.Select(step => step.At));
+        }
+
+        RefreshBaseStatus();
     }
 
     // ---- timeline edits (double-click edits in place, drag reorders,
@@ -1170,7 +1376,7 @@ public partial class MainWindow : Window
                                     ReplaceSelectedStep(
                                         new DelayEvent(d.Milliseconds, infinite: true)
                                     ),
-                                "Waits until the macro is stopped — keybind released (While held) or pressed again (Toggle)"
+                                "Waits until the macro is stopped · keybind released (While held) or pressed again (Toggle)"
                             )
                     );
                     break;
@@ -1279,6 +1485,16 @@ public partial class MainWindow : Window
             EventsList.SelectedItems.Add(EventsList.Items[i]);
     }
 
+    /// <summary>Selects the steps at <paramref name="indices"/>, whether or
+    /// not they sit next to each other. Indices past the end are skipped.</summary>
+    private void SelectEvents(IEnumerable<int> indices)
+    {
+        EventsList.SelectedItems.Clear();
+        foreach (var i in indices)
+            if (i >= 0 && i < EventsList.Items.Count)
+                EventsList.SelectedItems.Add(EventsList.Items[i]);
+    }
+
     private List<int> SelectedEventIndices()
     {
         var indices = new List<int>();
@@ -1304,8 +1520,14 @@ public partial class MainWindow : Window
     private void DeleteSelectedEvents()
     {
         var selected = SelectedEventIndices();
-        if (selected.Count == 0)
+        var macro = Selected;
+        if (selected.Count == 0 || macro < 0)
             return;
+
+        // Read the steps before the removal, each with the row it is on: the
+        // pairs are what Undo puts back.
+        var steps = bindings[macro].Macro.Events;
+        var lifted = selected.Select(at => (At: at, Step: steps[at])).ToList();
 
         ReplaceEvents(events =>
         {
@@ -1313,6 +1535,13 @@ public partial class MainWindow : Window
                 events.RemoveAt(selected[j]);
         });
         EventsList.SelectedIndex = Math.Min(selected[0], EventsList.Items.Count - 1);
+
+        // The binding as it stands after the removal: Undo looks it up by
+        // value, so the sidebar may be in a different order by then.
+        OfferUndo(
+            new Deletion(macro, bindings[macro], lifted),
+            selected.Count == 1 ? "Deleted 1 step" : $"Deleted {selected.Count} steps"
+        );
     }
 
     private void AddStep_Click(object sender, RoutedEventArgs e)
@@ -1406,7 +1635,7 @@ public partial class MainWindow : Window
             AppendRecordButton.Content = "Stop";
             AppendRecordButton.SetResourceReference(ForegroundProperty, "Red");
             AppendRecordButton.SetResourceReference(BorderBrushProperty, "Red");
-            Status("recording macro");
+            RefreshBaseStatus(); // the base line reads Recording from here
             return;
         }
 
@@ -1530,9 +1759,19 @@ public partial class MainWindow : Window
                 );
             labels.Children.Add(nameRow);
 
-            var subtitle = MutedText(
-                $"{TriggerLabel(b)} · {ModeLabel(b)}"
-                    + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}")
+            // The trigger is a run of its own so a refused enable can turn
+            // that part alone Red (see conflictRow).
+            var trigger = new Run(TriggerLabel(b));
+            if (i == conflictRow)
+                trigger.SetResourceReference(TextElement.ForegroundProperty, "Red");
+
+            var subtitle = MutedText("");
+            subtitle.Inlines.Add(trigger);
+            subtitle.Inlines.Add(
+                new Run(
+                    $" · {ModeLabel(b)}"
+                        + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}")
+                )
             );
             subtitle.FontSize = 11;
             labels.Children.Add(subtitle);
@@ -1546,6 +1785,7 @@ public partial class MainWindow : Window
         }
 
         BindingsList.SelectedIndex = select;
+        conflictRow = -1; // the mark lives for exactly one rebuild
         refreshing = false;
         RefreshKeyboard();
     }
@@ -1761,28 +2001,103 @@ public partial class MainWindow : Window
             _ => button.ToString(),
         };
 
-    // Status messages are transient by design: each fades out after a few
-    // seconds instead of lingering as stale text. Live state doesn't need
-    // words — the dot and rule below keep showing armed/recording.
+    // The bar reads in two tiers. The base line always names the true state
+    // and never fades; messages sit on top of it — confirmations for a few
+    // seconds, errors and conflicts until the next thing the user does.
     private readonly System.Windows.Threading.DispatcherTimer statusFade = new()
     {
         Interval = TimeSpan.FromSeconds(3),
     };
 
-    private void Status(string message)
+    // True while a confirmation owns the bar; the base line waits underneath.
+    private bool statusOverlaid;
+
+    // Bumped by every message, so a fade that finishes after a newer message
+    // arrived knows the bar is no longer its to restore.
+    private int statusToken;
+
+    /// <summary>The bar's resting text: what the app is doing right now. The
+    /// live count is the set <see cref="RearmAsync"/> arms.</summary>
+    private string BaseStatus
     {
-        StatusText.BeginAnimation(OpacityProperty, null); // cancel a fade in flight
-        StatusText.Opacity = 1;
-        StatusText.Text = message;
-        UpdateLiveIndicators();
+        get
+        {
+            if (hooks.IsRecording)
+                return "Recording";
+            if (ArmToggle.IsChecked != true)
+                return "Off";
+
+            var live = Armable().Length;
+            return $"On · {live} {(live == 1 ? "macro" : "macros")} live";
+        }
+    }
+
+    /// <summary>Puts a message over the base line. Confirmations fade back to
+    /// it after 3 s; <paramref name="sticky"/> ones — errors and conflicts —
+    /// stay in Red until the next message or the next base recompute.</summary>
+    private void Status(string message, bool sticky = false)
+    {
+        SetStatusText(message, sticky);
+        statusOverlaid = !sticky;
 
         statusFade.Stop(); // restart the 3 s clock for this message
-        statusFade.Start();
+        if (!sticky)
+            statusFade.Start();
+    }
+
+    /// <summary>Fades the message on the bar out and brings the base line
+    /// back in its place. The base itself never fades away.</summary>
+    private void FadeToBaseStatus()
+    {
+        var token = statusToken;
+        var fadeOut = new DoubleAnimation(0, TimeSpan.FromMilliseconds(400));
+        fadeOut.Completed += (_, _) =>
+        {
+            if (token != statusToken)
+                return; // a newer message took the bar mid-fade
+
+            statusOverlaid = false;
+            SetStatusText(BaseStatus, sticky: false);
+            StatusText.BeginAnimation(
+                OpacityProperty,
+                new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(400))
+            );
+        };
+        StatusText.BeginAnimation(OpacityProperty, fadeOut);
+    }
+
+    /// <summary>Recomputes the base line: call it wherever arm state, the live
+    /// count, or recording changes. It replaces a sticky message (the state
+    /// moved on, so the error is stale) but waits under a confirmation until
+    /// that confirmation's 3 s are up.</summary>
+    private void RefreshBaseStatus()
+    {
+        if (statusOverlaid)
+        {
+            // The dot and rule still follow the state right away; the text
+            // lands on the new base when the confirmation fades.
+            UpdateLiveIndicators();
+            return;
+        }
+
+        statusFade.Stop();
+        SetStatusText(BaseStatus, sticky: false);
+    }
+
+    private void SetStatusText(string text, bool sticky)
+    {
+        statusToken++;
+        StatusText.BeginAnimation(OpacityProperty, null); // cancel a fade in flight
+        StatusText.Opacity = 1;
+        StatusText.Text = text; // takes an Undo link down with the old message
+        StatusText.SetResourceReference(ForegroundProperty, sticky ? "Red" : "Subtext");
+        UpdateLiveIndicators();
     }
 
     /// <summary>The theme's "LED": the rule under the top bar and the status
     /// dot go amber while armed, red while recording, off when idle. Every
-    /// state change routes through <see cref="Status"/>, so this stays true.</summary>
+    /// state change routes through <see cref="Status"/> or
+    /// <see cref="RefreshBaseStatus"/>, so this stays true.</summary>
     private void UpdateLiveIndicators()
     {
         var (dot, rule) =
@@ -1842,7 +2157,22 @@ public partial class MainWindow : Window
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
     {
         if (!hotkeyCapturing)
+        {
+            // Ctrl+Z takes the last delete back. Guarded like the Delete keys:
+            // inside a text box the shortcut belongs to the editor.
+            if (
+                e.Key == Key.Z
+                && Keyboard.Modifiers == ModifierKeys.Control
+                && pendingUndo is not null
+                && Keyboard.FocusedElement is not TextBox
+            )
+            {
+                RestoreUndo();
+                e.Handled = true;
+            }
+
             return;
+        }
 
         // Alt-combinations arrive as Key.System with the real key tucked away.
         var key = e.Key == Key.System ? e.SystemKey : e.Key;
@@ -1890,7 +2220,10 @@ public partial class MainWindow : Window
             }
             else
             {
-                Status($"couldn't register {HotkeyLabel(key, modifiers)} — another app may own it");
+                Status(
+                    $"couldn't register {HotkeyLabel(key, modifiers)} · another app may own it",
+                    sticky: true
+                );
                 armHotkeyKey = Key.None;
                 armHotkeyModifiers = ModifierKeys.None;
             }
@@ -1982,7 +2315,8 @@ public partial class MainWindow : Window
         if (armHotkeyKey != Key.None && !TryRegisterArmHotkey())
         {
             Status(
-                $"couldn't register {HotkeyLabel(armHotkeyKey, armHotkeyModifiers)} — another app may own it"
+                $"couldn't register {HotkeyLabel(armHotkeyKey, armHotkeyModifiers)} · another app may own it",
+                sticky: true
             );
             armHotkeyKey = Key.None;
             armHotkeyModifiers = ModifierKeys.None;

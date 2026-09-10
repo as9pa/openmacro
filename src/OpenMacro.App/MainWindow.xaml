@@ -42,8 +42,8 @@
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="2,1,8,0"
                                  VerticalAlignment="Center" Fill="{DynamicResource Overlay0}"/>
-                        <!-- Blank until something happens; messages fade out
-                             after 3 s (see Status in code-behind). -->
+                        <!-- Never blank: the base line names the state and
+                             messages sit over it (see Status in code-behind). -->
                         <TextBlock x:Name="StatusText"
                                    Foreground="{DynamicResource Subtext}"
                                    VerticalAlignment="Center"/>
