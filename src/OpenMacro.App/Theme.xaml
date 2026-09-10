@@ -204,10 +204,12 @@
                         </Ellipse>
                     </Border>
                     <ControlTemplate.Triggers>
-                        <!-- Ahead of the checked trigger, so hover only lifts
-                             the unchecked track; checked stays flat accent. -->
+                        <!-- One step lighter up the ramp than the resting
+                             track. Ahead of the checked trigger, so hover
+                             only lifts the unchecked track; checked stays
+                             flat accent. -->
                         <Trigger Property="IsMouseOver" Value="True">
-                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource Surface2}"/>
+                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource Overlay0}"/>
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="Track" Property="Background" Value="{DynamicResource Accent}"/>
