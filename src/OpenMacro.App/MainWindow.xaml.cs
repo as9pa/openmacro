@@ -30,6 +30,16 @@ public partial class MainWindow : Window
     private TaskbarIcon? tray;
     private MenuItem? trayArmItem;
 
+    // The two tray icons, swapped by UpdateTrayState. Loaded once: each one
+    // owns an icon handle, and the shell holds whichever we hand it.
+    //
+    // The on variant's dot is baked into the .ico in Theme.Default's Accent,
+    // #7C9CBF. A tray icon is a bitmap the shell keeps, not a brush the app
+    // repaints, so it cannot follow the runtime Windows accent the rest of the
+    // UI picks up: the fallback accent is the one value that always applies.
+    private readonly System.Drawing.Icon trayOffIcon = LoadTrayIcon("tray-off.ico");
+    private readonly System.Drawing.Icon trayOnIcon = LoadTrayIcon("tray-on.ico");
+
     // Binding index the "Record steps" recording appends into; -1 when idle.
     private int recordTargetIndex = -1;
 
@@ -173,6 +183,7 @@ public partial class MainWindow : Window
     {
         if (trayArmItem is not null)
             trayArmItem.IsChecked = true;
+        UpdateTrayState();
         await RearmAsync();
     }
 
@@ -180,6 +191,7 @@ public partial class MainWindow : Window
     {
         if (trayArmItem is not null)
             trayArmItem.IsChecked = false;
+        UpdateTrayState();
         await hooks.DisarmAsync();
 
         if (decliningEnable)
@@ -2234,14 +2246,49 @@ public partial class MainWindow : Window
         menu.Items.Add(new Separator());
         menu.Items.Add(exit);
 
-        tray = new TaskbarIcon
-        {
-            ToolTipText = "openmacro",
-            Icon = System.Drawing.SystemIcons.Application,
-            ContextMenu = menu,
-        };
+        tray = new TaskbarIcon { ContextMenu = menu };
         tray.TrayLeftMouseUp += (_, _) => RestoreFromTray();
+        UpdateTrayState(); // off at startup; every arm change re-runs it
     }
+
+    /// <summary>Puts the tray icon and its tooltip on the arm state. Both
+    /// <see cref="ArmToggle_Checked"/> and <see cref="ArmToggle_Unchecked"/>
+    /// call it, and every way of arming routes through those two (the switch,
+    /// the tray menu item, the global hotkey), so the tray reads right even
+    /// while the window is hidden and it is the only readout left.</summary>
+    private void UpdateTrayState()
+    {
+        if (tray is null)
+            return;
+
+        var on = ArmToggle.IsChecked == true;
+        tray.Icon = on ? trayOnIcon : trayOffIcon;
+        tray.ToolTipText = on ? "openmacro · on" : "openmacro · off";
+    }
+
+    /// <summary>Loads one of the two tray icons at the size the shell draws
+    /// the tray at. The .ico carries a 16 px and a 32 px frame and the shell
+    /// takes a single bitmap, so the frame has to be picked here: asking for
+    /// the small-icon metric gets the crisp one rather than a downscale of
+    /// the other.</summary>
+    private static System.Drawing.Icon LoadTrayIcon(string file)
+    {
+        using var stream = Application
+            .GetResourceStream(new Uri($"Assets/{file}", UriKind.Relative))
+            .Stream;
+        return new System.Drawing.Icon(
+            stream,
+            GetSystemMetrics(SmCxSmIcon),
+            GetSystemMetrics(SmCySmIcon)
+        );
+    }
+
+    // Tray icon width and height, in the shell's own DPI.
+    private const int SmCxSmIcon = 49;
+    private const int SmCySmIcon = 50;
+
+    [DllImport("user32.dll")]
+    private static extern int GetSystemMetrics(int index);
 
     private void RestoreFromTray()
     {
@@ -2929,6 +2976,8 @@ public partial class MainWindow : Window
         if (windowHandle != 0)
             UnregisterHotKey(windowHandle, ArmHotkeyId);
         tray?.Dispose();
+        trayOffIcon.Dispose(); // the tray is gone, so the handles can go too
+        trayOnIcon.Dispose();
         hooks.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
         base.OnClosing(e);
     }
