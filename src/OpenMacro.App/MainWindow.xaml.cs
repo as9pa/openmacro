@@ -1190,7 +1190,7 @@ public partial class MainWindow : Window
         SaveAndRearm();
         RefreshBindingsList(Math.Min(i, bindings.Count - 1));
         RefreshDetail();
-        OfferUndo(new Deletion(i, deleted, null), $"Deleted “{deleted.Macro.Name}”");
+        OfferUndo(new Deletion(i, deleted, null, null), $"Deleted “{deleted.Macro.Name}”");
     }
 
     private static MenuItem MenuItemFor(string header, Action action, string? toolTip = null)
@@ -1206,13 +1206,19 @@ public partial class MainWindow : Window
     /// <see cref="Deletion.Binding"/>, which sat at
     /// <see cref="Deletion.Index"/>, or — when <see cref="Deletion.Steps"/> is
     /// set — those steps lifted out of that binding, each paired with the row
-    /// it sat on (ascending). The steps case keeps the binding itself rather
-    /// than trusting its index: a reorder or an edit can move it before Undo
-    /// runs, and the steps must go back into the macro they came out of.</summary>
+    /// it sat on (ascending). The steps case finds its macro again by
+    /// <see cref="Deletion.Events"/>, the step list the delete left in place,
+    /// and never by the index the steps came out of: a reorder or an edit can
+    /// move the macro before Undo runs, and the steps must go back into the
+    /// one they came out of. Every edit to a binding rewrites the record
+    /// around that same list, so the list outlives all of them; only another
+    /// edit to these very steps puts a new list there, and that withdraws the
+    /// offer (see <see cref="ReplaceEventsAt"/>).</summary>
     private sealed record Deletion(
         int Index,
         Binding Binding,
-        List<(int At, MacroEvent Step)>? Steps
+        List<(int At, MacroEvent Step)>? Steps,
+        IReadOnlyList<MacroEvent>? Events
     );
 
     private Deletion? pendingUndo;
@@ -1293,12 +1299,15 @@ public partial class MainWindow : Window
             RefreshBindingsList(at);
             RefreshDetail();
         }
-        else if (bindings.IndexOf(undo.Binding) is var macro && macro >= 0)
+        else if (
+            bindings.FindIndex(b => ReferenceEquals(b.Macro.Events, undo.Events)) is var macro
+            && macro >= 0
+        )
         {
-            // The macro is found by value, never by the index the steps came
-            // out of: a reorder or an edit can have put a different macro
-            // there, and the steps would land in its timeline. Gone means
-            // gone, and re-selecting them only means anything while the macro
+            // The macro is found by the step list it holds, never by the
+            // index the steps came out of: a reorder or an edit can have put
+            // a different macro there, and the steps would land in its
+            // timeline. Re-selecting them only means anything while the macro
             // they came from is the one on show.
             if (Selected != macro)
             {
@@ -1312,9 +1321,17 @@ public partial class MainWindow : Window
                 {
                     foreach (var (at, step) in steps)
                         events.Insert(Math.Min(at, events.Count), step);
-                }
+                },
+                keepUndo: true // the offer is being spent here, not outrun
             );
             SelectEvents(steps.Select(step => step.At));
+        }
+        else
+        {
+            // Out of reach while the list instance holds, since anything that
+            // replaces it withdraws the offer first. Kept so a path that ever
+            // does lose it says so instead of dropping the steps in silence.
+            Status("nothing to undo");
         }
 
         RefreshBaseStatus();
@@ -1744,10 +1761,11 @@ public partial class MainWindow : Window
         });
         EventsList.SelectedIndex = Math.Min(selected[0], StepRowCount - 1);
 
-        // The binding as it stands after the removal: Undo looks it up by
-        // value, so the sidebar may be in a different order by then.
+        // The step list as it stands after the removal: Undo looks the macro
+        // up by it, so the sidebar may be in a different order, and the
+        // binding may have been edited, by then.
         OfferUndo(
-            new Deletion(macro, bindings[macro], lifted),
+            new Deletion(macro, bindings[macro], lifted, bindings[macro].Macro.Events),
             selected.Count == 1 ? "Deleted 1 step" : $"Deleted {selected.Count} steps"
         );
     }
@@ -1978,12 +1996,19 @@ public partial class MainWindow : Window
     /// <summary>
     /// Mutates a specific binding's steps — the target is an index, not the
     /// selection, so "Record steps" still lands in the right macro if the
-    /// selection changed while recording.
+    /// selection changed while recording. Every edit here puts a new list in
+    /// place of the old one, so a pending step Undo loses the macro it was
+    /// going back into: the offer goes with the steps it recorded, unless
+    /// <paramref name="keepUndo"/> says this edit is that Undo putting them
+    /// back.
     /// </summary>
-    private void ReplaceEventsAt(int i, Action<List<MacroEvent>> mutate)
+    private void ReplaceEventsAt(int i, Action<List<MacroEvent>> mutate, bool keepUndo = false)
     {
         if (i < 0 || i >= bindings.Count)
             return;
+
+        if (!keepUndo)
+            CancelUndoOffer();
 
         var events = bindings[i].Macro.Events.ToList();
         mutate(events);
