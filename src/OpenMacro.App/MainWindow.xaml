@@ -101,8 +101,24 @@
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <!-- name (click to rename) -->
+                    <!-- name (click to rename) + everything else this macro can
+                         do, behind the overflow dots -->
                     <DockPanel Grid.Row="0">
+                        <Button x:Name="MoreButton" DockPanel.Dock="Right"
+                                Style="{StaticResource OverflowButton}"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="More actions"
+                                ToolTip="More actions"
+                                Click="MoreButton_Click">
+                            <!-- Three middle dots tracked 2 px apart. WPF has no
+                                 letter spacing, so the tracking is a margin and
+                                 each dot is its own block. -->
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="·"/>
+                                <TextBlock Text="·" Margin="2,0,0,0"/>
+                                <TextBlock Text="·" Margin="2,0,0,0"/>
+                            </StackPanel>
+                        </Button>
                         <!-- Generous transparent padding = a forgiving hover/click
                              target around the title. The underline is a separate
                              rectangle so it can fade in (TextDecorations can't). -->

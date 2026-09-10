@@ -744,15 +744,29 @@ public partial class MainWindow : Window
         }
 
         BindingsList.SelectedIndex = i;
+        BindingsList.ContextMenu = BuildBindingMenu(i);
+    }
 
+    /// <summary>The one macro menu, opened by a right-click on a sidebar row
+    /// and by the detail header's overflow button. Every item acts on the
+    /// selected binding, so both callers select <paramref name="index"/>
+    /// first.</summary>
+    private ContextMenu BuildBindingMenu(int index)
+    {
         var menu = new ContextMenu();
         menu.Items.Add(MenuItemFor("Run now", RunSelectedBindingOnce));
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItemFor("Rename", StartNameEdit));
-        menu.Items.Add(MenuItemFor("Change trigger…", BeginTriggerCapture));
+        menu.Items.Add(MenuItemFor("Change keybind…", BeginTriggerCapture));
+
+        // Where unassigning lives now that Esc cancels a capture instead.
+        var clear = MenuItemFor("Clear keybind", ClearSelectedKeybind);
+        clear.IsEnabled = bindings[index].HasTrigger;
+        AutomationProperties.SetAutomationId(clear, "ClearKeybindItem");
+        menu.Items.Add(clear);
+
         menu.Items.Add(BuildAppFilterMenu());
         menu.Items.Add(MenuItemFor("Duplicate", DuplicateSelectedBinding));
-        menu.Items.Add(MenuItemFor("Delete", DeleteSelectedBinding));
         menu.Items.Add(new Separator());
         menu.Items.Add(
             MenuItemFor(
@@ -764,7 +778,49 @@ public partial class MainWindow : Window
                     )
             )
         );
-        BindingsList.ContextMenu = menu;
+        menu.Items.Add(new Separator());
+
+        // Last, alone, and in the alarm ink: the only item that destroys
+        // anything.
+        var delete = MenuItemFor("Delete", DeleteSelectedBinding);
+        delete.SetResourceReference(ForegroundProperty, "Red");
+        menu.Items.Add(delete);
+        return menu;
+    }
+
+    /// <summary>The detail header's overflow button: the same macro menu the
+    /// sidebar row opens, hung under the dots.</summary>
+    private void MoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        var menu = BuildBindingMenu(i);
+        menu.Placement = PlacementMode.Bottom;
+        menu.PlacementTarget = MoreButton;
+        MoreButton.ContextMenu = menu; // the menu's parent, for the theme's sake
+        menu.IsOpen = true;
+    }
+
+    /// <summary>"Clear keybind": the binding gives up its keybind, and with it
+    /// any chance of firing, so it is force-disabled at the same time.</summary>
+    private void ClearSelectedKeybind()
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        bindings[i] = bindings[i] with
+        {
+            Trigger = KeyCode.VcUndefined,
+            MouseTrigger = null,
+            Enabled = false,
+        };
+        SaveAndRearm();
+        RefreshBindingsList(i);
+        RefreshDetail();
+        Status("keybind cleared");
     }
 
     /// <summary>"Only in app": limits the selected binding to firing while one
