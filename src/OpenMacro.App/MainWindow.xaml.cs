@@ -2355,12 +2355,20 @@ public partial class MainWindow : Window
                     break;
             }
 
+        var count = $"{events.Count} {(events.Count == 1 ? "step" : "steps")}";
+
+        // A macro with no waits in it has no length to report: what the presses
+        // themselves cost happens on the far side of the hook. The count says
+        // everything there is to say, and "0 ms" would say something false.
+        if (!infinite && total == 0)
+            return count;
+
         var length =
             infinite ? "∞"
             : total < 1000 ? $"{total} ms"
             : $"{(total / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)} s";
 
-        return $"{events.Count} {(events.Count == 1 ? "step" : "steps")} · {length}";
+        return $"{count} · {length}";
     }
 
     private static string ScrollName(ScrollDirection direction) =>
