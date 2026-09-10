@@ -1063,6 +1063,8 @@ public partial class MainWindow : Window
         statusFade.Stop(); // this message runs on the 8 s clock, not the 3 s one
 
         var undo = new Hyperlink(new Run("Undo")) { Style = (Style)FindResource("StatusLink") };
+        AutomationProperties.SetAutomationId(undo, "UndoLink");
+        AutomationProperties.SetName(undo, "Undo");
         undo.Click += (_, _) => RestoreUndo();
         StatusText.Inlines.Add(new Run(" · "));
         StatusText.Inlines.Add(undo);
