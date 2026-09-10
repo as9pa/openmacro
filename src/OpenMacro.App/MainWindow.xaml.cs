@@ -1370,7 +1370,7 @@ public partial class MainWindow : Window
             return;
 
         var parts = row.Children.OfType<StackPanel>().First();
-        var valueText = parts.Children.OfType<TextBlock>().First(t => Equals(t.Tag, ValueTag));
+        var (valueSlot, valueText) = ValuePart(parts);
 
         var box = new TextBox
         {
@@ -1385,8 +1385,8 @@ public partial class MainWindow : Window
             VerticalContentAlignment = VerticalAlignment.Center,
         };
 
-        var slot = parts.Children.IndexOf(valueText);
-        valueText.Visibility = Visibility.Collapsed;
+        var slot = parts.Children.IndexOf(valueSlot);
+        valueSlot.Visibility = Visibility.Collapsed;
         parts.Children.Insert(slot, box);
 
         var done = false;
@@ -1403,7 +1403,7 @@ public partial class MainWindow : Window
             else
             {
                 parts.Children.Remove(box);
-                valueText.Visibility = Visibility.Visible;
+                valueSlot.Visibility = Visibility.Visible;
                 EventsList.SelectedIndex = at;
             }
         }
@@ -1431,6 +1431,23 @@ public partial class MainWindow : Window
 
         box.SelectAll();
         box.Focus();
+    }
+
+    /// <summary>A step row's value, both ways round: the tagged TextBlock, for
+    /// its text and its width, and the element that stands in the row for it,
+    /// which is either that TextBlock or the chip it sits in (see
+    /// <see cref="ValueElement"/>). Inline edit hides the latter and puts its
+    /// TextBox in that slot.</summary>
+    private static (UIElement Slot, TextBlock Text) ValuePart(StackPanel parts)
+    {
+        foreach (var child in parts.Children.OfType<UIElement>())
+        {
+            var text = child as TextBlock ?? (child as ContentControl)?.Content as TextBlock;
+            if (text is not null && Equals(text.Tag, ValueTag))
+                return (child, text);
+        }
+
+        throw new InvalidOperationException("step row has no value part");
     }
 
     private void EventsList_RightClick(object sender, MouseButtonEventArgs e)
@@ -2154,8 +2171,10 @@ public partial class MainWindow : Window
         SyncAppBox(b);
 
         EventsList.Items.Clear();
-        foreach (var macroEvent in b.Macro.Events)
-            EventsList.Items.Add(new ListBoxItem { Content = BuildStepRow(macroEvent) });
+        for (var step = 0; step < b.Macro.Events.Count; step++)
+            EventsList.Items.Add(
+                new ListBoxItem { Content = BuildStepRow(step + 1, b.Macro.Events[step]) }
+            );
 
         refreshing = false;
     }
@@ -2180,6 +2199,15 @@ public partial class MainWindow : Window
     // Marks the editable part of a step row (see BeginInlineEdit).
     private const string ValueTag = "value";
 
+    /// <summary>How a step's value is drawn: a key on a chip, a figure in
+    /// tabular numerals so a column of them lines up, or plain text.</summary>
+    private enum ValueFace
+    {
+        Plain,
+        Figure,
+        Chip,
+    }
+
     /// <summary>A muted TextBlock. The foreground is a resource reference, not
     /// a copied brush, so a theme change repaints it.</summary>
     private static TextBlock MutedText(string text)
@@ -2189,50 +2217,103 @@ public partial class MainWindow : Window
         return block;
     }
 
-    /// <summary>A timeline row: muted verb in a fixed column, then the value
-    /// (tagged so inline edit can swap just that part) with muted quotes/units
-    /// around it.</summary>
-    private Grid BuildStepRow(MacroEvent macroEvent)
+    /// <summary>A timeline row: the step number and the muted verb in fixed
+    /// columns, then the value (tagged so inline edit can swap just that part)
+    /// with muted quotes/units around it. The number is right-aligned in
+    /// tabular figures, so single and triple digits share one edge.</summary>
+    private Grid BuildStepRow(int number, MacroEvent macroEvent)
     {
-        var (verb, prefix, value, suffix) = DescribeParts(macroEvent);
+        var (verb, prefix, value, suffix, face) = DescribeParts(macroEvent);
 
-        var parts = new StackPanel { Orientation = Orientation.Horizontal };
+        var parts = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
         if (prefix.Length > 0)
             parts.Children.Add(MutedText(prefix));
-        parts.Children.Add(new TextBlock { Text = value, Tag = ValueTag });
+        parts.Children.Add(ValueElement(value, face));
         if (suffix.Length > 0)
             parts.Children.Add(MutedText(suffix));
 
-        var row = new Grid();
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
-        row.ColumnDefinitions.Add(new ColumnDefinition());
+        var index = new TextBlock
+        {
+            Text = number.ToString(),
+            FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        index.SetResourceReference(TextBlock.ForegroundProperty, "Overlay0");
+        Typography.SetNumeralAlignment(index, FontNumeralAlignment.Tabular);
+
         var verbText = MutedText(verb);
-        Grid.SetColumn(parts, 1);
+        verbText.VerticalAlignment = VerticalAlignment.Center;
+
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        Grid.SetColumn(verbText, 2);
+        Grid.SetColumn(parts, 4);
+        row.Children.Add(index);
         row.Children.Add(verbText);
         row.Children.Add(parts);
         return row;
     }
 
-    private static (string Verb, string Prefix, string Value, string Suffix) DescribeParts(
-        MacroEvent e
-    ) =>
+    /// <summary>The value part of a row. The TextBlock always carries
+    /// <see cref="ValueTag"/>, whichever face the value wears: a key on the
+    /// same chip the sidebar uses, a figure in tabular numerals, or plain
+    /// text.</summary>
+    private FrameworkElement ValueElement(string value, ValueFace face)
+    {
+        var text = new TextBlock { Text = value, Tag = ValueTag };
+        if (face == ValueFace.Figure)
+            Typography.SetNumeralAlignment(text, FontNumeralAlignment.Tabular);
+        if (face != ValueFace.Chip)
+            return text;
+
+        return new ContentControl
+        {
+            Content = text,
+            Style = (Style)FindResource("KeyChip"),
+            // The chip is taller than the line of text it replaces, and the
+            // same trick the inline editor uses keeps the row from growing
+            // under it: the vertical margins absorb the difference, so the
+            // chip asks for a text-sized slot and draws its full 20 px
+            // centred on it. A chip row is exactly as tall as a plain one.
+            Margin = new Thickness(0, -3, 0, -3),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+    }
+
+    private static (
+        string Verb,
+        string Prefix,
+        string Value,
+        string Suffix,
+        ValueFace Face
+    ) DescribeParts(MacroEvent e) =>
         e switch
         {
-            Engine.KeyDownEvent k => ("press", "", KeyName(k.Key), ""),
-            Engine.KeyUpEvent k => ("release", "", KeyName(k.Key), ""),
-            MouseDownEvent m => ("press", "", MouseName(m.Button), ""),
-            MouseUpEvent m => ("release", "", MouseName(m.Button), ""),
+            Engine.KeyDownEvent k => ("press", "", KeyName(k.Key), "", ValueFace.Chip),
+            Engine.KeyUpEvent k => ("release", "", KeyName(k.Key), "", ValueFace.Chip),
+            MouseDownEvent m => ("press", "", MouseName(m.Button), "", ValueFace.Chip),
+            MouseUpEvent m => ("release", "", MouseName(m.Button), "", ValueFace.Chip),
             ScrollEvent s => (
                 "scroll",
                 s.Direction == ScrollDirection.Up ? "up × " : "down × ",
                 s.Clicks.ToString(),
-                ""
+                "",
+                ValueFace.Figure
             ),
-            DelayEvent { Infinite: true } => ("wait", "", "∞", ""),
-            DelayEvent d => ("wait", "", d.Milliseconds.ToString(), " ms"),
-            TextEvent t => ("type", "“", t.Text, "”"),
-            WaitForReleaseEvent => ("wait", "", "until keybind released", ""),
-            _ => ("?", "", e.ToString() ?? "", ""),
+            DelayEvent { Infinite: true } => ("wait", "", "∞", "", ValueFace.Plain),
+            DelayEvent d => ("wait", "", d.Milliseconds.ToString(), " ms", ValueFace.Figure),
+            TextEvent t => ("type", "“", t.Text, "”", ValueFace.Plain),
+            WaitForReleaseEvent => ("wait", "", "until keybind released", "", ValueFace.Plain),
+            _ => ("?", "", e.ToString() ?? "", "", ValueFace.Plain),
         };
 
     private static string ScrollName(ScrollDirection direction) =>
