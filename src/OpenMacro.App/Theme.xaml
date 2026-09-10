@@ -117,6 +117,33 @@
         </Setter>
     </Style>
 
+    <!-- No face of its own: the content carries all the chrome (the hotkey
+         key chip in the status bar). Hover paints a whisper of a halo 3 px
+         proud of the content, on a negative margin so it costs no layout and
+         the gaps either side of the button stay exact. -->
+    <Style x:Key="GhostButton" TargetType="Button">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Chrome" Margin="-3,-2" Padding="3,2" CornerRadius="5"
+                            Background="{TemplateBinding Background}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Press}"/>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- Checked = live: amber text and border on an amber-washed field. -->
     <Style TargetType="ToggleButton">
         <Setter Property="Foreground" Value="{DynamicResource ButtonText}"/>
@@ -151,6 +178,137 @@
                 </ControlTemplate>
             </Setter.Value>
         </Setter>
+    </Style>
+
+    <!-- ================= switch ================= -->
+
+    <!-- Master Enable: a track with a sliding knob and no label inside, so
+         the bar reads as one state, not a verb that flips. -->
+    <Style x:Key="Switch" TargetType="ToggleButton">
+        <Setter Property="Width" Value="34"/>
+        <Setter Property="Height" Value="18"/>
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Track" CornerRadius="9"
+                            Background="{DynamicResource Surface3}">
+                        <!-- Knob inset 2 px all round, so its travel is
+                             34 - 2 - 14 - 2 = 16. -->
+                        <Ellipse x:Name="Knob" Width="14" Height="14" Margin="2,0,0,0"
+                                 HorizontalAlignment="Left" VerticalAlignment="Center"
+                                 Fill="{DynamicResource Subtext}">
+                            <Ellipse.RenderTransform>
+                                <TranslateTransform x:Name="KnobSlide"/>
+                            </Ellipse.RenderTransform>
+                        </Ellipse>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <!-- Ahead of the checked trigger, so hover only lifts
+                             the unchecked track; checked stays flat accent. -->
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource Surface2}"/>
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Track" Property="Background" Value="{DynamicResource Accent}"/>
+                            <!-- White, not theme ink: the track underneath is
+                                 the user's accent color, which can be any hue. -->
+                            <Setter TargetName="Knob" Property="Fill" Value="White"/>
+                            <Trigger.EnterActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="KnobSlide"
+                                                         Storyboard.TargetProperty="X"
+                                                         To="16" Duration="0:0:0.18">
+                                            <DoubleAnimation.EasingFunction>
+                                                <QuadraticEase EasingMode="EaseOut"/>
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.EnterActions>
+                            <Trigger.ExitActions>
+                                <BeginStoryboard>
+                                    <Storyboard>
+                                        <DoubleAnimation Storyboard.TargetName="KnobSlide"
+                                                         Storyboard.TargetProperty="X"
+                                                         To="0" Duration="0:0:0.18">
+                                            <DoubleAnimation.EasingFunction>
+                                                <QuadraticEase EasingMode="EaseOut"/>
+                                            </DoubleAnimation.EasingFunction>
+                                        </DoubleAnimation>
+                                    </Storyboard>
+                                </BeginStoryboard>
+                            </Trigger.ExitActions>
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.45"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ================= key chips =================
+         A key name drawn as a keycap: raised face, a heavier stroke along the
+         bottom for the cap's edge. Decoration, not a control — hit testing is
+         off, so a chip used as a button's content never eats the click. -->
+
+    <Style x:Key="KeyChip" TargetType="ContentControl">
+        <Setter Property="Background" Value="{DynamicResource Surface1}"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Surface3}"/>
+        <Setter Property="BorderThickness" Value="1,1,1,2"/>
+        <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+        <Setter Property="Padding" Value="6,0,6,1"/>
+        <Setter Property="MinWidth" Value="24"/>
+        <Setter Property="Height" Value="20"/>
+        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="IsHitTestVisible" Value="False"/>
+        <Setter Property="TextOptions.TextFormattingMode" Value="Display"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <Border CornerRadius="4"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}"
+                            BorderThickness="{TemplateBinding BorderThickness}"
+                            Padding="{TemplateBinding Padding}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- Nothing assigned yet: an empty outline, drawn by a Rectangle because
+         a Border cannot dash. -->
+    <Style x:Key="KeyChipUnset" TargetType="ContentControl" BasedOn="{StaticResource KeyChip}">
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="{DynamicResource Overlay0}"/>
+        <Setter Property="FontWeight" Value="Normal"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ContentControl">
+                    <Grid>
+                        <Rectangle RadiusX="4" RadiusY="4"
+                                   Fill="{TemplateBinding Background}"
+                                   Stroke="{TemplateBinding BorderBrush}"
+                                   StrokeThickness="1" StrokeDashArray="3 2"/>
+                        <ContentPresenter Margin="{TemplateBinding Padding}"
+                                          HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Grid>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The same cap in the alarm ink, for a key the app has to flag. No
+         consumer yet. -->
+    <Style x:Key="KeyChipDanger" TargetType="ContentControl" BasedOn="{StaticResource KeyChip}">
+        <Setter Property="BorderBrush" Value="{DynamicResource Red}"/>
+        <Setter Property="Foreground" Value="{DynamicResource Red}"/>
     </Style>
 
     <!-- ================= text input ================= -->
