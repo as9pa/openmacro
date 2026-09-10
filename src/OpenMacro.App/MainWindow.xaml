@@ -96,10 +96,28 @@
 
             <!-- Right: selected macro detail -->
             <Grid>
-                <TextBlock x:Name="EmptyState" Foreground="{DynamicResource Overlay0}"
-                           TextAlignment="Center" LineHeight="22"
+                <!-- Nothing made yet: the detail area says what a macro is
+                     for and offers the one move that leads anywhere. -->
+                <StackPanel x:Name="EmptyNoMacros" Visibility="Collapsed"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="No macros yet" FontSize="15"
+                               Foreground="{DynamicResource Text}"
+                               HorizontalAlignment="Center"/>
+                    <TextBlock Text="Create one, then record your keystrokes or add steps by hand."
+                               FontSize="12.5" Margin="0,4,0,0"
+                               Foreground="{DynamicResource Overlay0}"
+                               HorizontalAlignment="Center"/>
+                    <Button x:Name="EmptyNewMacroButton" Content="New macro"
+                            Margin="0,10,0,0" Padding="8,3"
+                            HorizontalAlignment="Center" Click="AddMacro_Click"/>
+                </StackPanel>
+
+                <!-- Macros exist and none is picked: one line, no advice.
+                     The list beside it is the advice. -->
+                <TextBlock x:Name="EmptyNoSelection" Visibility="Collapsed"
+                           Foreground="{DynamicResource Overlay0}"
                            HorizontalAlignment="Center" VerticalAlignment="Center"
-                           Text="Select a macro, or press + to create one."/>
+                           Text="Select a macro"/>
 
                 <Grid x:Name="DetailPanel" Margin="18,14,18,14" Visibility="Collapsed">
                     <Grid.RowDefinitions>
@@ -295,10 +313,39 @@
                     <Border Grid.Row="3" Background="{DynamicResource Surface0}"
                             BorderBrush="{DynamicResource Hairline}" BorderThickness="1"
                             CornerRadius="4" Padding="2,4">
-                        <ListBox x:Name="EventsList" SelectionMode="Extended"
-                                 MouseDoubleClick="EventsList_MouseDoubleClick"
-                                 PreviewMouseRightButtonDown="EventsList_RightClick"
-                                 KeyDown="EventsList_KeyDown"/>
+                        <Grid>
+                            <ListBox x:Name="EventsList" SelectionMode="Extended"
+                                     MouseDoubleClick="EventsList_MouseDoubleClick"
+                                     PreviewMouseRightButtonDown="EventsList_RightClick"
+                                     KeyDown="EventsList_KeyDown"/>
+                            <!-- Over the list rather than in it, and hit by
+                                 nothing but its two buttons: a text block
+                                 without a background takes no clicks, so
+                                 right-clicking the empty timeline still opens
+                                 the insert menu underneath. -->
+                            <StackPanel x:Name="EmptyNoSteps" Visibility="Collapsed"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock Text="No steps yet" FontSize="14"
+                                           Foreground="{DynamicResource Text}"
+                                           HorizontalAlignment="Center"/>
+                                <TextBlock Text="Record your keystrokes, or add steps one at a time."
+                                           FontSize="12" Margin="0,4,0,0"
+                                           Foreground="{DynamicResource Overlay0}"
+                                           HorizontalAlignment="Center"/>
+                                <!-- The same two actions the row of tools
+                                     above carries, at the same size. -->
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0"
+                                            HorizontalAlignment="Center">
+                                    <Button x:Name="EmptyRecordButton" Content="Record"
+                                            Padding="8,3"
+                                            ToolTip="Record input into this macro"
+                                            Click="AppendRecord_Click"/>
+                                    <Button x:Name="EmptyAddStepButton" Content="Add step ▾"
+                                            Margin="6,0,0,0" Padding="8,3"
+                                            Click="AddStep_Click"/>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
                     </Border>
                 </Grid>
             </Grid>

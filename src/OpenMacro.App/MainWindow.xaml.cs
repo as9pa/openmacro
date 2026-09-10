@@ -1706,7 +1706,8 @@ public partial class MainWindow : Window
             return;
 
         var menu = BuildStepMenu("Add", atEnd: false);
-        menu.PlacementTarget = AddStepButton;
+        // Whichever button asked: the row of tools', or the empty timeline's.
+        menu.PlacementTarget = sender as UIElement ?? AddStepButton;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         menu.IsOpen = true;
     }
@@ -1788,9 +1789,7 @@ public partial class MainWindow : Window
             // The click leaves keyboard focus on this button, and Space/Enter
             // activate a focused button — recording a Space would press Stop.
             Keyboard.ClearFocus();
-            AppendRecordButton.Content = "Stop";
-            AppendRecordButton.SetResourceReference(ForegroundProperty, "Red");
-            AppendRecordButton.SetResourceReference(BorderBrushProperty, "Red");
+            SyncRecordButtons(recording: true);
             RefreshBaseStatus(); // the base line reads Recording from here
             return;
         }
@@ -1798,9 +1797,7 @@ public partial class MainWindow : Window
         var recorded = hooks.StopRecording("steps");
         var target = recordTargetIndex;
         recordTargetIndex = -1;
-        AppendRecordButton.Content = "Record";
-        AppendRecordButton.ClearValue(ForegroundProperty);
-        AppendRecordButton.ClearValue(BorderBrushProperty);
+        SyncRecordButtons(recording: false);
 
         if (recorded.Events.Count == 0)
         {
@@ -1810,6 +1807,27 @@ public partial class MainWindow : Window
 
         ReplaceEventsAt(target, events => events.AddRange(recorded.Events));
         Status($"added {recorded.Events.Count} steps");
+    }
+
+    /// <summary>Both Record buttons wear one face: the row of tools' and the
+    /// empty timeline's twin, which is the one on show while the macro has no
+    /// steps of its own. Recording turns them into Stop, in Red.</summary>
+    private void SyncRecordButtons(bool recording)
+    {
+        foreach (var button in new[] { AppendRecordButton, EmptyRecordButton })
+        {
+            button.Content = recording ? "Stop" : "Record";
+            if (recording)
+            {
+                button.SetResourceReference(ForegroundProperty, "Red");
+                button.SetResourceReference(BorderBrushProperty, "Red");
+            }
+            else
+            {
+                button.ClearValue(ForegroundProperty);
+                button.ClearValue(BorderBrushProperty);
+            }
+        }
     }
 
     private void MoveUp_Click(object sender, RoutedEventArgs e) => MoveEvent(-1);
@@ -1982,6 +2000,7 @@ public partial class MainWindow : Window
 
         conflictRow = -1; // the mark lives for exactly one rebuild
         refreshing = false;
+        UpdateEmptyStates(); // how many macros there are decides the detail area
         RefreshKeyboard();
     }
 
@@ -2154,13 +2173,12 @@ public partial class MainWindow : Window
         if (i < 0)
         {
             DetailPanel.Visibility = Visibility.Collapsed;
-            EmptyState.Visibility = Visibility.Visible;
+            UpdateEmptyStates();
             return;
         }
 
         refreshing = true;
         DetailPanel.Visibility = Visibility.Visible;
-        EmptyState.Visibility = Visibility.Collapsed;
 
         var b = bindings[i];
         NameText.Text = b.Macro.Name;
@@ -2177,8 +2195,28 @@ public partial class MainWindow : Window
                 new ListBoxItem { Content = BuildStepRow(step + 1, b.Macro.Events[step]) }
             );
         UpdateTimelineSummary();
+        UpdateEmptyStates();
 
         refreshing = false;
+    }
+
+    /// <summary>Which of the three empty panels speaks. Nothing made yet is
+    /// the only one worth an instruction and a way out of it; with macros on
+    /// the left and none picked, the list beside it already says what to do,
+    /// so the detail area says one line and stops. The timeline's own panel
+    /// answers to the rows on show rather than to the macro's steps: the
+    /// recording placeholder is a row, and "No steps yet" under it would be
+    /// a lie.</summary>
+    private void UpdateEmptyStates()
+    {
+        var any = bindings.Count > 0;
+        EmptyNoMacros.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
+        EmptyNoSelection.Visibility =
+            any && Selected < 0 ? Visibility.Visible : Visibility.Collapsed;
+        EmptyNoSteps.Visibility =
+            Selected >= 0 && EventsList.Items.Count == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
     }
 
     /// <summary>The header's keybind, as the button's whole face: the key on a
