@@ -924,11 +924,81 @@ public partial class MainWindow : Window
         bindings[i] = bindings[i] with { AppFilter = app };
         SaveAndRearm();
         RefreshBindingsList(i);
+
+        // The header's App box follows the submenu too. Only the box, not the
+        // whole detail panel: a filter change is no reason to rebuild the
+        // timeline underneath it.
+        refreshing = true;
+        SyncAppBox(bindings[i]);
+        refreshing = false;
+
         Status(
             app is null
                 ? $"{bindings[i].Macro.Name} fires anywhere"
                 : $"{bindings[i].Macro.Name} fires only in {app}"
         );
+    }
+
+    /// <summary>One row of the header's App box: the filter it writes (null is
+    /// "Anywhere"), the text it shows, and the app's icon when there is
+    /// one.</summary>
+    private sealed record AppChoice(string? App, string Label, ImageSource? Icon);
+
+    private static readonly AppChoice anywhere = new(null, "Anywhere", null);
+
+    /// <summary>What the closed box has to read before it is ever opened:
+    /// "Anywhere" and, when this binding is filtered, the app it is filtered
+    /// to. Enumerating every running process waits for the drop-down (see
+    /// <see cref="AppBox_DropDownOpened"/>).</summary>
+    private void SyncAppBox(Binding b)
+    {
+        AppBox.Items.Clear();
+        AppBox.Items.Add(anywhere);
+        if (b.AppFilter is { } app)
+            AppBox.Items.Add(new AppChoice(app, app, GetAppIcon(app)));
+        AppBox.SelectedIndex = b.AppFilter is null ? 0 : 1;
+    }
+
+    /// <summary>The full list, built when the drop-down opens: "Anywhere",
+    /// every app with a window right now, and the filter itself when it names
+    /// an app that isn't running. The selection rides through the
+    /// rebuild.</summary>
+    private void AppBox_DropDownOpened(object sender, EventArgs e)
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        var current = bindings[i].AppFilter;
+        var choices = new List<AppChoice> { anywhere };
+        var listed = false;
+        foreach (var (name, _) in RunningApps())
+        {
+            choices.Add(new AppChoice(name, name, GetAppIcon(name)));
+            listed = string.Equals(current, name, StringComparison.OrdinalIgnoreCase) || listed;
+        }
+
+        // Not running right now: still listed, so the filter is visible and
+        // stays selected. The icon can still come back from the disk cache.
+        if (current is not null && !listed)
+            choices.Add(new AppChoice(current, $"{current} (not running)", GetAppIcon(current)));
+
+        refreshing = true; // rebuilding the list is not a user edit
+        AppBox.Items.Clear();
+        foreach (var choice in choices)
+            AppBox.Items.Add(choice);
+        AppBox.SelectedItem = choices.First(c =>
+            string.Equals(c.App, current, StringComparison.OrdinalIgnoreCase)
+        );
+        refreshing = false;
+    }
+
+    private void AppBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (refreshing || Selected < 0 || AppBox.SelectedItem is not AppChoice choice)
+            return;
+
+        SetAppFilter(choice.App);
     }
 
     private void BindingsList_KeyDown(object sender, KeyEventArgs e)
@@ -2019,15 +2089,30 @@ public partial class MainWindow : Window
         NameText.Text = b.Macro.Name;
         NameEditBox.Visibility = Visibility.Collapsed;
         NameText.Visibility = Visibility.Visible;
-        TriggerButton.Content = TriggerLabel(b);
+        SyncTriggerChip(b, i);
         ModeBox.SelectedIndex = (int)b.Mode;
         SyncRepeatBox(b);
+        SyncAppBox(b);
 
         EventsList.Items.Clear();
         foreach (var macroEvent in b.Macro.Events)
             EventsList.Items.Add(new ListBoxItem { Content = BuildStepRow(macroEvent) });
 
         refreshing = false;
+    }
+
+    /// <summary>The header's keybind, as the button's whole face: the key on a
+    /// big keycap, the dashed outline when nothing is bound, or Red when this
+    /// binding's keybind was just refused. The same three faces the sidebar
+    /// row wears (see <see cref="KeybindColumn"/>), one size up.</summary>
+    private void SyncTriggerChip(Binding b, int i)
+    {
+        TriggerChip.Content = b.HasTrigger ? TriggerLabel(b) : "Set keybind";
+        TriggerChip.Style = (Style)FindResource(
+            !b.HasTrigger ? "KeyChipUnset"
+            : i == conflictRow ? "KeyChipDanger"
+            : "KeyChipBig"
+        );
     }
 
     // Marks the editable part of a step row (see BeginInlineEdit).
