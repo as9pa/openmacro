@@ -1954,6 +1954,14 @@ public partial class MainWindow : Window
         }
 
         BindingsList.SelectedIndex = select;
+
+        // The header's chip wears whatever the selected row's chip wears, a
+        // refusal mark included, and loses it on the same rebuild the row
+        // does. Every path that refuses an enable ends up here, so this is
+        // the one place the two chips have to agree.
+        if (Selected >= 0)
+            SyncTriggerChip(bindings[Selected], Selected);
+
         conflictRow = -1; // the mark lives for exactly one rebuild
         refreshing = false;
         RefreshKeyboard();
@@ -2155,13 +2163,16 @@ public partial class MainWindow : Window
     /// <summary>The header's keybind, as the button's whole face: the key on a
     /// big keycap, the dashed outline when nothing is bound, or Red when this
     /// binding's keybind was just refused. The same three faces the sidebar
-    /// row wears (see <see cref="KeybindColumn"/>), one size up.</summary>
+    /// row wears (see <see cref="KeybindColumn"/>), all three at the header's
+    /// size, so the row never changes height under them. Style and text only:
+    /// cheap enough for the refusal paths that must not rebuild the detail
+    /// panel.</summary>
     private void SyncTriggerChip(Binding b, int i)
     {
         TriggerChip.Content = b.HasTrigger ? TriggerLabel(b) : "Set keybind";
         TriggerChip.Style = (Style)FindResource(
-            !b.HasTrigger ? "KeyChipUnset"
-            : i == conflictRow ? "KeyChipDanger"
+            !b.HasTrigger ? "KeyChipBigUnset"
+            : i == conflictRow ? "KeyChipBigDanger"
             : "KeyChipBig"
         );
     }

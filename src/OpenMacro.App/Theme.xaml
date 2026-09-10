@@ -313,7 +313,8 @@
          keybind button's whole face. Asymmetric padding: key names carry more
          leading than trailing side-bearing, so the ink sits right of true
          center, and the extra 2 px on the right nudges it back to optical
-         center. -->
+         center. The two "Big" variants below repeat these four metrics, so
+         the header chip is the same size whichever face it wears. -->
     <Style x:Key="KeyChipBig" TargetType="ContentControl" BasedOn="{StaticResource KeyChip}">
         <Setter Property="Padding" Value="11,0,13,1"/>
         <Setter Property="MinWidth" Value="40"/>
@@ -343,11 +344,30 @@
         </Setter>
     </Style>
 
-    <!-- The same cap in the alarm ink, for a key the app has to flag. No
-         consumer yet. -->
+    <!-- The unset face at the header's size (see KeyChipBig). -->
+    <Style x:Key="KeyChipBigUnset" TargetType="ContentControl"
+           BasedOn="{StaticResource KeyChipUnset}">
+        <Setter Property="Padding" Value="11,0,13,1"/>
+        <Setter Property="MinWidth" Value="40"/>
+        <Setter Property="Height" Value="26"/>
+        <Setter Property="FontSize" Value="13"/>
+    </Style>
+
+    <!-- The same cap in the alarm ink, for a key the app has to flag: worn by
+         the sidebar row's chip and the detail header's chip while a keybind
+         they both show has just been refused. -->
     <Style x:Key="KeyChipDanger" TargetType="ContentControl" BasedOn="{StaticResource KeyChip}">
         <Setter Property="BorderBrush" Value="{DynamicResource Red}"/>
         <Setter Property="Foreground" Value="{DynamicResource Red}"/>
+    </Style>
+
+    <!-- The refused face at the header's size (see KeyChipBig). -->
+    <Style x:Key="KeyChipBigDanger" TargetType="ContentControl"
+           BasedOn="{StaticResource KeyChipDanger}">
+        <Setter Property="Padding" Value="11,0,13,1"/>
+        <Setter Property="MinWidth" Value="40"/>
+        <Setter Property="Height" Value="26"/>
+        <Setter Property="FontSize" Value="13"/>
     </Style>
 
     <!-- ================= text input ================= -->

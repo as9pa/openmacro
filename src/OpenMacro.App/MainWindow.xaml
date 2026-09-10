@@ -182,11 +182,10 @@
                                 HorizontalAlignment="Left" Margin="0,10,0,16">
                         <TextBlock Text="Keybind" Foreground="{DynamicResource Subtext}"
                                    VerticalAlignment="Center"/>
-                        <!-- Chromeless: the chip is the whole button. MinHeight
-                             holds the row at the big chip's height, so an unset
-                             or refused keybind (a smaller chip) never shortens
-                             the row. -->
-                        <Button x:Name="TriggerButton" Margin="6,0,0,0" MinHeight="26"
+                        <!-- Chromeless: the chip is the whole button, and it is
+                             the header's size on all three of its faces, so an
+                             unset or refused keybind never resizes the row. -->
+                        <Button x:Name="TriggerButton" Margin="6,0,0,0"
                                 Style="{StaticResource GhostButton}"
                                 VerticalAlignment="Center"
                                 ToolTip="Click, then press a key · Esc cancels"
