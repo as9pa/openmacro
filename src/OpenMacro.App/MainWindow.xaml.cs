@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -2175,6 +2176,7 @@ public partial class MainWindow : Window
             EventsList.Items.Add(
                 new ListBoxItem { Content = BuildStepRow(step + 1, b.Macro.Events[step]) }
             );
+        UpdateTimelineSummary();
 
         refreshing = false;
     }
@@ -2315,6 +2317,51 @@ public partial class MainWindow : Window
             WaitForReleaseEvent => ("wait", "", "until keybind released", "", ValueFace.Plain),
             _ => ("?", "", e.ToString() ?? "", "", ValueFace.Plain),
         };
+
+    /// <summary>The step count and total wait beside the Timeline eyebrow.
+    /// Called from every rebuild of the list, since a step added or removed
+    /// changes both halves. With no steps it stays out of the way, and the
+    /// empty state speaks for the macro instead.</summary>
+    private void UpdateTimelineSummary()
+    {
+        var i = Selected;
+        if (i < 0 || bindings[i].Macro.Events.Count == 0)
+        {
+            TimelineSummary.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        TimelineSummary.Visibility = Visibility.Visible;
+        TimelineSummary.Text = TimelineSummaryText(bindings[i].Macro.Events);
+    }
+
+    /// <summary>How many steps, and how long their waits add up to:
+    /// milliseconds under a second, seconds to one decimal from there. One
+    /// infinite wait makes the whole length unknowable, so it stands for the
+    /// total. Invariant culture, so the decimal point matches the one the rows
+    /// below it show.</summary>
+    private static string TimelineSummaryText(IReadOnlyList<MacroEvent> events)
+    {
+        var total = 0L;
+        var infinite = false;
+        foreach (var e in events)
+            switch (e)
+            {
+                case DelayEvent { Infinite: true }:
+                    infinite = true;
+                    break;
+                case DelayEvent d:
+                    total += d.Milliseconds;
+                    break;
+            }
+
+        var length =
+            infinite ? "∞"
+            : total < 1000 ? $"{total} ms"
+            : $"{(total / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)} s";
+
+        return $"{events.Count} {(events.Count == 1 ? "step" : "steps")} · {length}";
+    }
 
     private static string ScrollName(ScrollDirection direction) =>
         direction == ScrollDirection.Up ? "scroll up" : "scroll down";

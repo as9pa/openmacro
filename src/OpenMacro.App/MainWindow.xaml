@@ -267,6 +267,11 @@
                     <DockPanel Grid.Row="2" Margin="0,0,0,8">
                         <TextBlock Text="Timeline" Style="{StaticResource Eyebrow}"
                                    VerticalAlignment="Center"/>
+                        <!-- Step count and how long the waits add up to, stamped
+                             by UpdateTimelineSummary; hidden with no steps. -->
+                        <TextBlock x:Name="TimelineSummary" Margin="8,0,0,0" FontSize="11.5"
+                                   Foreground="{DynamicResource Overlay0}"
+                                   VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button x:Name="AddStepButton" Padding="8,3" Click="AddStep_Click">
                                 <StackPanel Orientation="Horizontal">
