@@ -13,13 +13,10 @@ namespace OpenMacro.App;
 internal sealed class RowDragAdorner(UIElement adorned, ImageSource snapshot, Size size)
     : Adorner(adorned)
 {
-    private static readonly Brush Backing = new SolidColorBrush(
-        Color.FromArgb(0xF2, 0x2E, 0x2B, 0x29)
-    );
-    private static readonly Pen Outline = new(
-        new SolidColorBrush(Color.FromRgb(0x4C, 0x47, 0x41)),
-        1
-    );
+    // Read once per drag rather than cached statically, so a theme change
+    // between drags is picked up.
+    private readonly Brush backing = ThemeManager.Brush("DragBacking");
+    private readonly Pen outline = new(ThemeManager.Brush("Surface3"), 1);
 
     // A dependency property (not a plain field) so SettleTo can drive it
     // through WPF's animation system.
@@ -62,7 +59,7 @@ internal sealed class RowDragAdorner(UIElement adorned, ImageSource snapshot, Si
     protected override void OnRender(DrawingContext dc)
     {
         var rect = new Rect(new Point(0, (double)GetValue(YProperty)), size);
-        dc.DrawRectangle(Backing, Outline, rect);
+        dc.DrawRectangle(backing, outline, rect);
         dc.DrawImage(snapshot, rect);
     }
 }

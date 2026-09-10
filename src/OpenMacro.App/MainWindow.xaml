@@ -2,7 +2,7 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="openmacro" Height="560" Width="920" MinHeight="400" MinWidth="700"
-        Background="{StaticResource BgBrush}" Foreground="{StaticResource InkBrush}"
+        Background="{DynamicResource Base}" Foreground="{DynamicResource Text}"
         FontFamily="{StaticResource UiFont}" FontSize="13"
         TextOptions.TextFormattingMode="Display"
         PreviewKeyDown="Window_PreviewKeyDown">
@@ -11,38 +11,41 @@
              capture can blur it as one piece. -->
         <DockPanel x:Name="Shell">
             <!-- Bottom bar: status + master enable -->
-            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}"
-                    BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0"
+            <Border DockPanel.Dock="Bottom" Background="{DynamicResource Surface0}"
+                    BorderBrush="{DynamicResource Hairline}" BorderThickness="0,1,0,0"
                     Padding="12,7">
-                <DockPanel>
+                <!-- MinHeight is the height the bar had when Enable was a
+                     full-size button: the switch is shorter, and the bar
+                     shouldn't shrink under it. -->
+                <DockPanel MinHeight="29">
                     <ToggleButton x:Name="ArmToggle" DockPanel.Dock="Right"
+                                  Style="{StaticResource Switch}" VerticalAlignment="Center"
+                                  AutomationProperties.Name="Enable macros"
                                   ToolTip="While on, enabled macros fire on their keybinds"
-                                  Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked">
-                        <ToggleButton.Style>
-                            <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
-                                <Setter Property="Content" Value="Enable"/>
-                                <Style.Triggers>
-                                    <Trigger Property="IsChecked" Value="True">
-                                        <Setter Property="Content" Value="Disable"/>
-                                    </Trigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ToggleButton.Style>
-                    </ToggleButton>
+                                  Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked"/>
                     <!-- Global hotkey that flips Enable. RegisterHotKey-based
                          (see code-behind), so it works from the tray without
-                         the global hook existing while disarmed. -->
-                    <Button x:Name="HotkeyButton" DockPanel.Dock="Right" Margin="0,0,10,0"
-                            Padding="8,3" Foreground="{StaticResource InkMutedBrush}"
-                            ToolTip="Global hotkey that toggles Enable — works while the app is in the tray · click, then press a key · Esc clears"
-                            Click="HotkeyButton_Click"/>
+                         the global hook existing while disarmed. The chip is
+                         stamped by UpdateHotkeyButton. -->
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                Margin="0,0,10,0" VerticalAlignment="Center">
+                        <TextBlock Text="Enable hotkey" FontSize="12"
+                                   Foreground="{DynamicResource Subtext}"
+                                   VerticalAlignment="Center"/>
+                        <Button x:Name="HotkeyButton" Margin="6,0,0,0"
+                                Style="{StaticResource GhostButton}"
+                                ToolTip="Global hotkey that toggles Enable. Works while the app is in the tray · click, then press a key · Esc clears"
+                                Click="HotkeyButton_Click">
+                            <ContentControl x:Name="HotkeyChip" Style="{StaticResource KeyChip}"/>
+                        </Button>
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="2,1,8,0"
-                                 VerticalAlignment="Center" Fill="{StaticResource InkFaintBrush}"/>
+                                 VerticalAlignment="Center" Fill="{DynamicResource Overlay0}"/>
                         <!-- Blank until something happens; messages fade out
                              after 3 s (see Status in code-behind). -->
                         <TextBlock x:Name="StatusText"
-                                   Foreground="{StaticResource InkMutedBrush}"
+                                   Foreground="{DynamicResource Subtext}"
                                    VerticalAlignment="Center"/>
                     </StackPanel>
                 </DockPanel>
@@ -55,8 +58,8 @@
 
             <!-- Visual keyboard. Hidden for now (assignment happens via capture);
                  the control and its code stay for a later revisit. -->
-            <Border DockPanel.Dock="Bottom" Background="{StaticResource SurfaceBrush}" Visibility="Collapsed"
-                    BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,1,0,0">
+            <Border DockPanel.Dock="Bottom" Background="{DynamicResource Surface0}" Visibility="Collapsed"
+                    BorderBrush="{DynamicResource Hairline}" BorderThickness="0,1,0,0">
                 <Expander Header="Keyboard" IsExpanded="True" Padding="4,4,4,8">
                     <StackPanel x:Name="KeyboardHost" HorizontalAlignment="Center" Margin="0,4,0,0"/>
                 </Expander>
@@ -65,8 +68,8 @@
             <!-- Left: macros (drag reorders live — wired in code by ListReorder;
                  right-click for run/rename/trigger/etc., Delete key deletes,
                  double-click toggles enabled) -->
-            <Border DockPanel.Dock="Left" Width="300" Background="{StaticResource SurfaceBrush}"
-                    BorderBrush="{StaticResource HairlineBrush}" BorderThickness="0,0,1,0">
+            <Border DockPanel.Dock="Left" Width="300" Background="{DynamicResource Surface0}"
+                    BorderBrush="{DynamicResource Hairline}" BorderThickness="0,0,1,0">
                 <DockPanel>
                     <DockPanel DockPanel.Dock="Top" Margin="14,10,10,6">
                         <Button DockPanel.Dock="Right" Content="+" Padding="8,0" FontSize="15"
@@ -85,7 +88,7 @@
 
             <!-- Right: selected macro detail -->
             <Grid>
-                <TextBlock x:Name="EmptyState" Foreground="{StaticResource InkFaintBrush}"
+                <TextBlock x:Name="EmptyState" Foreground="{DynamicResource Overlay0}"
                            TextAlignment="Center" LineHeight="22"
                            HorizontalAlignment="Center" VerticalAlignment="Center"
                            Text="Select a macro, or press + to create one."/>
@@ -101,7 +104,7 @@
                     <DockPanel Grid.Row="0" Margin="0,0,0,14">
                         <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
                                     VerticalAlignment="Center">
-                            <TextBlock Text="Keybind" Foreground="{StaticResource InkMutedBrush}"
+                            <TextBlock Text="Keybind" Foreground="{DynamicResource Subtext}"
                                        VerticalAlignment="Center"/>
                             <!-- Asymmetric padding: key names carry more leading than
                                  trailing side-bearing, so the ink sits right of true
@@ -110,7 +113,7 @@
                                     Padding="11,5,13,5"
                                     ToolTip="Click, then press a key · Esc clears"
                                     Click="TriggerButton_Click"/>
-                            <TextBlock Text="Mode" Foreground="{StaticResource InkMutedBrush}"
+                            <TextBlock Text="Mode" Foreground="{DynamicResource Subtext}"
                                        Margin="14,0,0,0" VerticalAlignment="Center"/>
                             <ComboBox x:Name="ModeBox" Width="110" Margin="6,0,0,0"
                                       VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
@@ -140,7 +143,7 @@
                             <Grid>
                                 <TextBlock x:Name="NameText" FontSize="19" FontWeight="SemiBold"/>
                                 <Rectangle Height="1.5" VerticalAlignment="Bottom" Margin="1,0,1,-2"
-                                           Fill="{StaticResource InkMutedBrush}">
+                                           Fill="{DynamicResource Subtext}">
                                     <Rectangle.Style>
                                         <Style TargetType="Rectangle">
                                             <Setter Property="Opacity" Value="0"/>
@@ -188,7 +191,7 @@
                                     <TextBlock Text="Add"/>
                                     <Path Data="M 0,0 L 3.5,4 L 7,0" Margin="6,1,0,0"
                                           VerticalAlignment="Center"
-                                          Stroke="{StaticResource InkMutedBrush}" StrokeThickness="1.4"
+                                          Stroke="{DynamicResource Subtext}" StrokeThickness="1.4"
                                           StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
                                 </StackPanel>
                             </Button>
@@ -202,8 +205,8 @@
                          live (wired in code by ListReorder), shift-click selects a
                          range, Delete deletes the selection, right-click a row for
                          edits or empty space for inserts -->
-                    <Border Grid.Row="2" Background="{StaticResource SurfaceBrush}"
-                            BorderBrush="{StaticResource HairlineBrush}" BorderThickness="1"
+                    <Border Grid.Row="2" Background="{DynamicResource Surface0}"
+                            BorderBrush="{DynamicResource Hairline}" BorderThickness="1"
                             CornerRadius="4" Padding="2,4">
                         <ListBox x:Name="EventsList" SelectionMode="Extended"
                                  MouseDoubleClick="EventsList_MouseDoubleClick"
@@ -221,15 +224,15 @@
         <Grid x:Name="CaptureOverlay" Visibility="Collapsed" Opacity="0"
               MouseLeftButtonDown="CaptureOverlay_Click">
             <Grid.Background>
-                <SolidColorBrush Color="{StaticResource BgColor}" Opacity="0.72"/>
+                <SolidColorBrush Color="{DynamicResource BaseColor}" Opacity="0.72"/>
             </Grid.Background>
             <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center">
                 <Border MinWidth="64" Height="56" Padding="16,0"
                         HorizontalAlignment="Center" CornerRadius="7" BorderThickness="1.5"
-                        Background="{StaticResource FieldBrush}">
+                        Background="{DynamicResource Surface1}">
                     <Border.BorderBrush>
                         <SolidColorBrush x:Name="CaptureKeycapStroke"
-                                         Color="{StaticResource HairlineStrongColor}"/>
+                                         Color="{DynamicResource Surface3Color}"/>
                     </Border.BorderBrush>
                     <Border.Effect>
                         <DropShadowEffect BlurRadius="22" ShadowDepth="3" Opacity="0.45"/>
@@ -240,7 +243,7 @@
                 <TextBlock x:Name="CapturePrompt" Margin="0,20,0,0" FontSize="14.5"
                            HorizontalAlignment="Center"/>
                 <TextBlock x:Name="CaptureHint" Margin="0,7,0,0" FontSize="12"
-                           Foreground="{StaticResource InkFaintBrush}"
+                           Foreground="{DynamicResource Overlay0}"
                            HorizontalAlignment="Center"/>
             </StackPanel>
         </Grid>

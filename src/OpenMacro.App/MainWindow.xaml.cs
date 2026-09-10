@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Effects;
 using System.Windows.Media.Imaging;
+using System.Windows.Shapes;
 using Hardcodet.Wpf.TaskbarNotification;
 using OpenMacro.Engine;
 using SharpHook.Data;
@@ -18,16 +19,10 @@ namespace OpenMacro.App;
 
 public partial class MainWindow : Window
 {
-    private static readonly Brush SubtleText = new SolidColorBrush(Color.FromRgb(0xA3, 0x9B, 0x8E));
-    private static readonly Brush BoundKeyBrush = new SolidColorBrush(
-        Color.FromRgb(0x3B, 0x32, 0x26)
-    );
-
     private readonly HookService hooks = new();
     private readonly List<Binding> bindings;
     private readonly Dictionary<KeyCode, Button> keyButtons = [];
 
-    private Brush? defaultKeyBrush;
     private TaskbarIcon? tray;
     private MenuItem? trayArmItem;
 
@@ -363,14 +358,13 @@ public partial class MainWindow : Window
         );
 
         // The waiting LED: the empty keycap's border breathes toward the
-        // accent. Read the color off AccentBrush — it's retinted to the
-        // Windows accent at startup; the AccentColor resource is not.
+        // accent.
         CaptureKeycapStroke.BeginAnimation(SolidColorBrush.ColorProperty, null);
-        CaptureKeycapStroke.Color = (Color)FindResource("HairlineStrongColor");
+        CaptureKeycapStroke.Color = ThemeManager.Color("Surface3");
         CaptureKeycapStroke.BeginAnimation(
             SolidColorBrush.ColorProperty,
             new ColorAnimation(
-                ((SolidColorBrush)FindResource("AccentBrush")).Color,
+                ThemeManager.Color("Accent"),
                 TimeSpan.FromMilliseconds(1100)
             )
             {
@@ -393,7 +387,7 @@ public partial class MainWindow : Window
         {
             CaptureKeyName.Text = keyName;
             CaptureKeycapStroke.BeginAnimation(SolidColorBrush.ColorProperty, null);
-            CaptureKeycapStroke.Color = ((SolidColorBrush)FindResource("AccentBrush")).Color;
+            CaptureKeycapStroke.Color = ThemeManager.Color("Accent");
             await Task.Delay(320);
             // A capture begun during the beat owns the overlay again.
             if (captureOverlayUp)
@@ -1410,8 +1404,8 @@ public partial class MainWindow : Window
             // activate a focused button — recording a Space would press Stop.
             Keyboard.ClearFocus();
             AppendRecordButton.Content = "Stop";
-            AppendRecordButton.Foreground = (Brush)FindResource("DangerBrush");
-            AppendRecordButton.BorderBrush = (Brush)FindResource("DangerBrush");
+            AppendRecordButton.SetResourceReference(ForegroundProperty, "Red");
+            AppendRecordButton.SetResourceReference(BorderBrushProperty, "Red");
             Status("recording macro");
             return;
         }
@@ -1536,16 +1530,12 @@ public partial class MainWindow : Window
                 );
             labels.Children.Add(nameRow);
 
-            labels.Children.Add(
-                new TextBlock
-                {
-                    Text =
-                        $"{TriggerLabel(b)} · {ModeLabel(b)}"
-                        + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}"),
-                    Foreground = SubtleText,
-                    FontSize = 11,
-                }
+            var subtitle = MutedText(
+                $"{TriggerLabel(b)} · {ModeLabel(b)}"
+                    + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}")
             );
+            subtitle.FontSize = 11;
+            labels.Children.Add(subtitle);
 
             var row = new DockPanel { Margin = new Thickness(4, 2, 4, 2) };
             DockPanel.SetDock(check, Dock.Left);
@@ -1580,7 +1570,6 @@ public partial class MainWindow : Window
                     FontSize = 11,
                 };
                 button.Click += KeyboardKey_Click;
-                defaultKeyBrush ??= button.Background;
                 keyButtons[key.Code] = button;
                 panel.Children.Add(button);
             }
@@ -1594,7 +1583,10 @@ public partial class MainWindow : Window
         foreach (var (code, button) in keyButtons)
         {
             var bound = bindings.FirstOrDefault(b => b.Trigger == code);
-            button.Background = bound is null ? defaultKeyBrush : BoundKeyBrush;
+            if (bound is null)
+                button.ClearValue(BackgroundProperty);
+            else
+                button.SetResourceReference(BackgroundProperty, "KeyboardBound");
             button.FontWeight = bound is null ? FontWeights.Normal : FontWeights.SemiBold;
             button.ToolTip = bound is null ? null : $"{bound.Macro.Name} · {ModeLabel(bound)}";
         }
@@ -1700,6 +1692,15 @@ public partial class MainWindow : Window
     // Marks the editable part of a step row (see BeginInlineEdit).
     private const string ValueTag = "value";
 
+    /// <summary>A muted TextBlock. The foreground is a resource reference, not
+    /// a copied brush, so a theme change repaints it.</summary>
+    private static TextBlock MutedText(string text)
+    {
+        var block = new TextBlock { Text = text };
+        block.SetResourceReference(TextBlock.ForegroundProperty, "Subtext");
+        return block;
+    }
+
     /// <summary>A timeline row: muted verb in a fixed column, then the value
     /// (tagged so inline edit can swap just that part) with muted quotes/units
     /// around it.</summary>
@@ -1709,15 +1710,15 @@ public partial class MainWindow : Window
 
         var parts = new StackPanel { Orientation = Orientation.Horizontal };
         if (prefix.Length > 0)
-            parts.Children.Add(new TextBlock { Text = prefix, Foreground = SubtleText });
+            parts.Children.Add(MutedText(prefix));
         parts.Children.Add(new TextBlock { Text = value, Tag = ValueTag });
         if (suffix.Length > 0)
-            parts.Children.Add(new TextBlock { Text = suffix, Foreground = SubtleText });
+            parts.Children.Add(MutedText(suffix));
 
         var row = new Grid();
         row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
         row.ColumnDefinitions.Add(new ColumnDefinition());
-        var verbText = new TextBlock { Text = verb, Foreground = SubtleText };
+        var verbText = MutedText(verb);
         Grid.SetColumn(parts, 1);
         row.Children.Add(verbText);
         row.Children.Add(parts);
@@ -1785,12 +1786,15 @@ public partial class MainWindow : Window
     private void UpdateLiveIndicators()
     {
         var (dot, rule) =
-            hooks.IsRecording ? ("DangerBrush", "DangerBrush")
-            : ArmToggle.IsChecked == true ? ("AccentBrush", "AccentBrush")
-            : ("InkFaintBrush", null);
+            hooks.IsRecording ? ("Red", "Red")
+            : ArmToggle.IsChecked == true ? ("Accent", "Accent")
+            : ("Overlay0", null);
 
-        StatusDot.Fill = (Brush)FindResource(dot);
-        LiveRule.Fill = rule is null ? Brushes.Transparent : (Brush)FindResource(rule);
+        StatusDot.SetResourceReference(Shape.FillProperty, dot);
+        if (rule is null)
+            LiveRule.Fill = Brushes.Transparent;
+        else
+            LiveRule.SetResourceReference(Shape.FillProperty, rule);
     }
 
     // ---- global Enable hotkey ----
@@ -1935,9 +1939,14 @@ public partial class MainWindow : Window
         return string.Join("+", parts);
     }
 
-    private void UpdateHotkeyButton() =>
-        HotkeyButton.Content =
-            armHotkeyKey == Key.None ? "Set hotkey" : HotkeyLabel(armHotkeyKey, armHotkeyModifiers);
+    // The button's content is the key chip: the key name on a keycap, or
+    // the dashed empty outline when no hotkey is stored.
+    private void UpdateHotkeyButton()
+    {
+        var hasHotkey = armHotkeyKey != Key.None;
+        HotkeyChip.Content = hasHotkey ? HotkeyLabel(armHotkeyKey, armHotkeyModifiers) : "set";
+        HotkeyChip.Style = (Style)FindResource(hasHotkey ? "KeyChip" : "KeyChipUnset");
+    }
 
     private nint HotkeyWndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {
@@ -1984,7 +1993,9 @@ public partial class MainWindow : Window
         // are best-effort (older Windows just keeps the default title bar).
         var dark = 1;
         _ = DwmSetWindowAttribute(hwnd, 20, ref dark, sizeof(int)); // DWMWA_USE_IMMERSIVE_DARK_MODE
-        var caption = 0x00202123; // COLORREF (0x00BBGGRR) of the Bg token #232120
+        var background = ThemeManager.Color("Base");
+        // COLORREF (0x00BBGGRR).
+        var caption = background.R | (background.G << 8) | (background.B << 16);
         _ = DwmSetWindowAttribute(hwnd, 35, ref caption, sizeof(int)); // DWMWA_CAPTION_COLOR
     }
 
