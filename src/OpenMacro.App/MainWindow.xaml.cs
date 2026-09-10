@@ -53,6 +53,10 @@ public partial class MainWindow : Window
             blocksDrag: Rows.IsWithin<TextBox>,
             commit: (sources, to) =>
             {
+                // A reorder renumbers the rows a pending Undo record points
+                // at, so the offer goes with the old order.
+                CancelUndoOffer();
+
                 // The list already shows the final order; commit it to the
                 // model: pull the dragged steps out (sources are pre-drag
                 // indices, ascending) and reinsert them as one block.
@@ -67,6 +71,8 @@ public partial class MainWindow : Window
             },
             cancel: sources =>
             {
+                CancelUndoOffer();
+
                 // Rebuild to restore the model's order and clear ghosting.
                 RefreshDetail();
                 foreach (var i in sources)
@@ -82,6 +88,8 @@ public partial class MainWindow : Window
             // Single-select list: the block is always exactly one row.
             commit: (sources, to) =>
             {
+                CancelUndoOffer();
+
                 var moved = bindings[sources[0]];
                 bindings.RemoveAt(sources[0]);
                 bindings.Insert(to, moved);
@@ -91,6 +99,7 @@ public partial class MainWindow : Window
             },
             cancel: sources =>
             {
+                CancelUndoOffer();
                 RefreshBindingsList(sources.Length > 0 ? sources[0] : -1);
                 RefreshDetail();
             }
@@ -120,15 +129,9 @@ public partial class MainWindow : Window
             FadeToBaseStatus();
         };
 
-        // The Undo offer's 8 s are up: forget the delete, and hand the bar
-        // back to the base line if the offer is still the thing on it.
-        undoExpiry.Tick += (_, _) =>
-        {
-            var mine = statusToken == undoStatusToken;
-            DropUndo();
-            if (mine)
-                FadeToBaseStatus();
-        };
+        // The Undo offer's 8 s are up: same ending as any other way it
+        // stops being offered.
+        undoExpiry.Tick += (_, _) => CancelUndoOffer();
 
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
@@ -986,12 +989,16 @@ public partial class MainWindow : Window
 
     // ---- undo (one delete deep) ----
 
-    /// <summary>What the last delete took out: a whole binding removed from
-    /// <see cref="Deletion.Index"/>, or steps lifted out of the macro at that
-    /// index, each paired with the row it sat on (ascending).</summary>
+    /// <summary>What the last delete took out: the whole
+    /// <see cref="Deletion.Binding"/>, which sat at
+    /// <see cref="Deletion.Index"/>, or — when <see cref="Deletion.Steps"/> is
+    /// set — those steps lifted out of that binding, each paired with the row
+    /// it sat on (ascending). The steps case keeps the binding itself rather
+    /// than trusting its index: a reorder or an edit can move it before Undo
+    /// runs, and the steps must go back into the macro they came out of.</summary>
     private sealed record Deletion(
         int Index,
-        Binding? Binding,
+        Binding Binding,
         List<(int At, MacroEvent Step)>? Steps
     );
 
@@ -1037,6 +1044,21 @@ public partial class MainWindow : Window
         pendingUndo = null;
     }
 
+    /// <summary>Withdraws the offer: forgets the delete and, if the offer is
+    /// still what the bar is showing, fades the message back to the base line.
+    /// The 8 s expiry ends this way, and so does anything that renumbers the
+    /// rows the record points at.</summary>
+    private void CancelUndoOffer()
+    {
+        if (pendingUndo is null)
+            return;
+
+        var showing = statusToken == undoStatusToken;
+        DropUndo();
+        if (showing)
+            FadeToBaseStatus();
+    }
+
     /// <summary>Puts the last delete back where it came from and re-selects
     /// it. Steps go in ascending index order, so a non-contiguous selection
     /// lands on the rows it came from rather than bunched together.</summary>
@@ -1048,26 +1070,29 @@ public partial class MainWindow : Window
         DropUndo();
         statusOverlaid = false; // the offer is spent; the base takes the bar
 
-        if (undo.Binding is { } binding)
+        if (undo.Steps is not { } steps)
         {
             var at = Math.Min(undo.Index, bindings.Count);
-            bindings.Insert(at, binding);
+            bindings.Insert(at, undo.Binding);
             SaveAndRearm();
             RefreshBindingsList(at);
             RefreshDetail();
         }
-        else if (undo.Steps is { } steps && undo.Index < bindings.Count)
+        else if (bindings.IndexOf(undo.Binding) is var macro && macro >= 0)
         {
-            // Re-selecting steps only means anything while the macro they
-            // came from is the one on show.
-            if (Selected != undo.Index)
+            // The macro is found by value, never by the index the steps came
+            // out of: a reorder or an edit can have put a different macro
+            // there, and the steps would land in its timeline. Gone means
+            // gone, and re-selecting them only means anything while the macro
+            // they came from is the one on show.
+            if (Selected != macro)
             {
-                RefreshBindingsList(undo.Index);
+                RefreshBindingsList(macro);
                 RefreshDetail();
             }
 
             ReplaceEventsAt(
-                undo.Index,
+                macro,
                 events =>
                 {
                     foreach (var (at, step) in steps)
@@ -1480,8 +1505,10 @@ public partial class MainWindow : Window
         });
         EventsList.SelectedIndex = Math.Min(selected[0], EventsList.Items.Count - 1);
 
+        // The binding as it stands after the removal: Undo looks it up by
+        // value, so the sidebar may be in a different order by then.
         OfferUndo(
-            new Deletion(macro, null, lifted),
+            new Deletion(macro, bindings[macro], lifted),
             selected.Count == 1 ? "Deleted 1 step" : $"Deleted {selected.Count} steps"
         );
     }
