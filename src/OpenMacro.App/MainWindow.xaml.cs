@@ -256,6 +256,8 @@ public partial class MainWindow : Window
 
     private void AddMacro_Click(object sender, RoutedEventArgs e)
     {
+        CancelUndoOffer(); // a new row changes the shape the offer recorded
+
         // Starts trigger-less and disabled; record or insert steps next.
         bindings.Add(
             new Binding(
@@ -977,6 +979,8 @@ public partial class MainWindow : Window
         var i = Selected;
         if (i < 0)
             return;
+
+        CancelUndoOffer(); // the copy pushes every row below it down one
 
         // The copy keeps the keybind (sharing is allowed) but starts
         // unchecked — only one holder of a key may be enabled at a time.
