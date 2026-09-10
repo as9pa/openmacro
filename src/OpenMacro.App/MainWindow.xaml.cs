@@ -855,9 +855,10 @@ public partial class MainWindow : Window
         StringComparer.OrdinalIgnoreCase
     );
 
-    /// <summary>The filtered app's icon, from a currently running instance's
-    /// executable — null only when it isn't running or no instance yields a
-    /// path (the limited query even works on anti-cheat-protected games).</summary>
+    /// <summary>The filtered app's icon: from a currently running instance's
+    /// executable when there is one (the limited query even works on
+    /// anti-cheat-protected games), otherwise the copy a past session left in
+    /// the on-disk cache. Null only when neither has it.</summary>
     private static ImageSource? GetAppIcon(string processName)
     {
         if (appIconCache.TryGetValue(processName, out var cached))
@@ -875,17 +876,18 @@ public partial class MainWindow : Window
                 if (extracted is null)
                     continue;
 
+                // 32 px rather than the 14 the row shows: the same bitmap is
+                // what goes to the on-disk cache, and WPF scales it down.
                 var source = Imaging.CreateBitmapSourceFromHIcon(
                     extracted.Handle,
                     Int32Rect.Empty,
-                    BitmapSizeOptions.FromWidthAndHeight(16, 16)
+                    BitmapSizeOptions.FromWidthAndHeight(32, 32)
                 );
                 source.Freeze(); // usable from any thread, no live resource behind it
+                AppIconCache.Save(processName, source);
                 appIconCache[processName] = source;
                 return source;
             }
-
-            return null;
         }
         catch (Exception e)
             when (e
@@ -896,13 +898,21 @@ public partial class MainWindow : Window
                         or ArgumentException
             )
         {
-            return null;
+            // nothing readable while it runs, so try the cache too
         }
         finally
         {
             foreach (var process in processes)
                 process.Dispose();
         }
+
+        // No live instance to read the icon from: the copy a past session
+        // cached stands in, memoized for this session like a live hit.
+        if (AppIconCache.Load(processName) is not { } stored)
+            return null;
+
+        appIconCache[processName] = stored;
+        return stored;
     }
 
     private void SetAppFilter(string? app)
