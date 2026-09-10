@@ -493,8 +493,10 @@ public partial class MainWindow : Window
         if (holder >= 0)
             conflictRow = i; // the refusal marks the row's chip, as elsewhere
         SaveAndRearm();
-        RefreshBindingsList(i);
+        // Detail first: the mark lives for exactly one list rebuild, and the
+        // header's chip has to read it before that rebuild clears it.
         RefreshDetail();
+        RefreshBindingsList(i);
         if (holder < 0)
             Status($"keybind set · {KeyName(key)}");
         else
@@ -519,8 +521,8 @@ public partial class MainWindow : Window
         if (holder >= 0)
             conflictRow = i; // same refusal, same mark
         SaveAndRearm();
+        RefreshDetail(); // before the rebuild clears the mark, as above
         RefreshBindingsList(i);
-        RefreshDetail();
         if (holder < 0)
             Status($"keybind set · {MouseName(button)}");
         else
