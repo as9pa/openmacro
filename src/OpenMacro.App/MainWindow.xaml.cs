@@ -1009,16 +1009,36 @@ public partial class MainWindow : Window
 
     private static readonly AppChoice anywhere = new(null, "Anywhere", "", null);
 
+    /// <summary>The qualifier that follows an app's name: empty while the app
+    /// has a process, " (not running)" when it has none. The closed box and
+    /// the drop-down both ask here, so the box cannot read one way before it
+    /// is opened and another after.</summary>
+    private static string AppSuffix(string app)
+    {
+        var processes = System.Diagnostics.Process.GetProcessesByName(app);
+        try
+        {
+            return processes.Length > 0 ? "" : " (not running)";
+        }
+        finally
+        {
+            foreach (var process in processes)
+                process.Dispose();
+        }
+    }
+
     /// <summary>What the closed box has to read before it is ever opened:
     /// "Anywhere" and, when this binding is filtered, the app it is filtered
-    /// to. Enumerating every running process waits for the drop-down (see
-    /// <see cref="AppBox_DropDownOpened"/>).</summary>
+    /// to. Enumerating every running process still waits for the drop-down
+    /// (see <see cref="AppBox_DropDownOpened"/>); this asks after the one app
+    /// the filter names, so the closed box already carries the qualifier the
+    /// list will give it.</summary>
     private void SyncAppBox(Binding b)
     {
         AppBox.Items.Clear();
         AppBox.Items.Add(anywhere);
         if (b.AppFilter is { } app)
-            AppBox.Items.Add(new AppChoice(app, app, "", GetAppIcon(app)));
+            AppBox.Items.Add(new AppChoice(app, app, AppSuffix(app), GetAppIcon(app)));
         AppBox.SelectedIndex = b.AppFilter is null ? 0 : 1;
     }
 
@@ -1041,10 +1061,12 @@ public partial class MainWindow : Window
             listed = string.Equals(current, name, StringComparison.OrdinalIgnoreCase) || listed;
         }
 
-        // Not running right now: still listed, so the filter is visible and
-        // stays selected. The icon can still come back from the disk cache.
+        // No window of its own right now: still listed, so the filter is
+        // visible and stays selected. Whether it is running at all is the
+        // helper's call, not this list's. The icon can still come back from
+        // the disk cache.
         if (current is not null && !listed)
-            choices.Add(new AppChoice(current, current, " (not running)", GetAppIcon(current)));
+            choices.Add(new AppChoice(current, current, AppSuffix(current), GetAppIcon(current)));
 
         refreshing = true; // rebuilding the list is not a user edit
         AppBox.Items.Clear();
