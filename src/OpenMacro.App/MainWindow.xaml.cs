@@ -1939,9 +1939,14 @@ public partial class MainWindow : Window
         return string.Join("+", parts);
     }
 
-    private void UpdateHotkeyButton() =>
-        HotkeyButton.Content =
-            armHotkeyKey == Key.None ? "Set hotkey" : HotkeyLabel(armHotkeyKey, armHotkeyModifiers);
+    // The button's content is the key chip: the key name on a keycap, or
+    // the dashed empty outline when no hotkey is stored.
+    private void UpdateHotkeyButton()
+    {
+        var hasHotkey = armHotkeyKey != Key.None;
+        HotkeyChip.Content = hasHotkey ? HotkeyLabel(armHotkeyKey, armHotkeyModifiers) : "set";
+        HotkeyChip.Style = (Style)FindResource(hasHotkey ? "KeyChip" : "KeyChipUnset");
+    }
 
     private nint HotkeyWndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
     {

@@ -14,28 +14,31 @@
             <Border DockPanel.Dock="Bottom" Background="{DynamicResource Surface0}"
                     BorderBrush="{DynamicResource Hairline}" BorderThickness="0,1,0,0"
                     Padding="12,7">
-                <DockPanel>
+                <!-- MinHeight is the height the bar had when Enable was a
+                     full-size button: the switch is shorter, and the bar
+                     shouldn't shrink under it. -->
+                <DockPanel MinHeight="29">
                     <ToggleButton x:Name="ArmToggle" DockPanel.Dock="Right"
+                                  Style="{StaticResource Switch}" VerticalAlignment="Center"
+                                  AutomationProperties.Name="Enable macros"
                                   ToolTip="While on, enabled macros fire on their keybinds"
-                                  Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked">
-                        <ToggleButton.Style>
-                            <Style TargetType="ToggleButton" BasedOn="{StaticResource {x:Type ToggleButton}}">
-                                <Setter Property="Content" Value="Enable"/>
-                                <Style.Triggers>
-                                    <Trigger Property="IsChecked" Value="True">
-                                        <Setter Property="Content" Value="Disable"/>
-                                    </Trigger>
-                                </Style.Triggers>
-                            </Style>
-                        </ToggleButton.Style>
-                    </ToggleButton>
+                                  Checked="ArmToggle_Checked" Unchecked="ArmToggle_Unchecked"/>
                     <!-- Global hotkey that flips Enable. RegisterHotKey-based
                          (see code-behind), so it works from the tray without
-                         the global hook existing while disarmed. -->
-                    <Button x:Name="HotkeyButton" DockPanel.Dock="Right" Margin="0,0,10,0"
-                            Padding="8,3" Foreground="{DynamicResource Subtext}"
-                            ToolTip="Global hotkey that toggles Enable — works while the app is in the tray · click, then press a key · Esc clears"
-                            Click="HotkeyButton_Click"/>
+                         the global hook existing while disarmed. The chip is
+                         stamped by UpdateHotkeyButton. -->
+                    <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
+                                Margin="0,0,10,0" VerticalAlignment="Center">
+                        <TextBlock Text="Enable hotkey" FontSize="12"
+                                   Foreground="{DynamicResource Subtext}"
+                                   VerticalAlignment="Center"/>
+                        <Button x:Name="HotkeyButton" Margin="6,0,0,0"
+                                Style="{StaticResource GhostButton}"
+                                ToolTip="Global hotkey that toggles Enable — works while the app is in the tray · click, then press a key · Esc clears"
+                                Click="HotkeyButton_Click">
+                            <ContentControl x:Name="HotkeyChip" Style="{StaticResource KeyChip}"/>
+                        </Button>
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="2,1,8,0"
                                  VerticalAlignment="Center" Fill="{DynamicResource Overlay0}"/>
