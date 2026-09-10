@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -83,8 +85,9 @@ public partial class MainWindow : Window
 
         bindingsReorder = new ListReorder(
             BindingsList,
-            // A press on the checkbox is a toggle, not a grab.
-            blocksDrag: Rows.IsWithin<CheckBox>,
+            // A press on the checkbox is a toggle and a press on the row's
+            // "Set keybind" is a click; neither is a grab.
+            blocksDrag: Rows.IsWithin<ButtonBase>,
             // Single-select list: the block is always exactly one row.
             commit: (sources, to) =>
             {
@@ -928,8 +931,8 @@ public partial class MainWindow : Window
     private void BindingsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         // The checkbox already toggled on the clicks themselves — don't
-        // toggle a third time.
-        if (Rows.IsWithin<CheckBox>(e.OriginalSource))
+        // toggle a third time; "Set keybind" owns its own clicks too.
+        if (Rows.IsWithin<ButtonBase>(e.OriginalSource))
             return;
 
         var i = Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
@@ -1735,16 +1738,20 @@ public partial class MainWindow : Window
             check.Checked += EnabledChanged;
             check.Unchecked += EnabledChanged;
 
-            var labels = new StackPanel { Margin = new Thickness(8, 2, 0, 2) };
+            // The label block takes what the checkbox and the keybind leave.
+            // It clips: the keybind owns the right edge, so an over-long name
+            // stops at the label column instead of running under the chip.
+            var labels = new StackPanel { Margin = new Thickness(8, 2, 0, 2), ClipToBounds = true };
 
             // App-filtered macros carry the app's icon next to the name; when
             // the icon can't be resolved (app not running), the subtitle
             // spells the filter out instead.
             var icon = b.AppFilter is null ? null : GetAppIcon(b.AppFilter);
             var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
-            nameRow.Children.Add(
-                new TextBlock { Text = b.Macro.Name, FontWeight = FontWeights.SemiBold }
-            );
+            var name = new TextBlock { Text = b.Macro.Name, FontWeight = FontWeights.SemiBold };
+            // A disabled macro reads one ink step back, name and line under it.
+            name.SetResourceReference(TextBlock.ForegroundProperty, b.Enabled ? "Text" : "Subtext");
+            nameRow.Children.Add(name);
             if (icon is not null)
                 nameRow.Children.Add(
                     new Image
@@ -1759,35 +1766,90 @@ public partial class MainWindow : Window
                 );
             labels.Children.Add(nameRow);
 
-            // The trigger is a run of its own so a refused enable can turn
-            // that part alone Red (see conflictRow).
-            var trigger = new Run(TriggerLabel(b));
-            if (i == conflictRow)
-                trigger.SetResourceReference(TextElement.ForegroundProperty, "Red");
-
-            var subtitle = MutedText("");
-            subtitle.Inlines.Add(trigger);
-            subtitle.Inlines.Add(
-                new Run(
-                    $" · {ModeLabel(b)}"
-                        + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}")
-                )
+            // The keybind has moved to the chip, so the line under the name
+            // carries the mode — and the filtered app when no icon could.
+            var subtitle = new TextBlock
+            {
+                Text =
+                    ModeLabel(b)
+                    + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}"),
+                FontSize = 11,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            subtitle.SetResourceReference(
+                TextBlock.ForegroundProperty,
+                b.Enabled ? "Subtext" : "Overlay0"
             );
-            subtitle.FontSize = 11;
             labels.Children.Add(subtitle);
 
             var row = new DockPanel { Margin = new Thickness(4, 2, 4, 2) };
             DockPanel.SetDock(check, Dock.Left);
             row.Children.Add(check);
-            row.Children.Add(labels);
+            var keybind = KeybindColumn(b, i);
+            DockPanel.SetDock(keybind, Dock.Right);
+            row.Children.Add(keybind);
+            row.Children.Add(labels); // last child: fills what the two leave
 
-            BindingsList.Items.Add(new ListBoxItem { Content = row });
+            BindingsList.Items.Add(new ListBoxItem { Content = row, MinHeight = 48 });
         }
 
         BindingsList.SelectedIndex = select;
         conflictRow = -1; // the mark lives for exactly one rebuild
         refreshing = false;
         RefreshKeyboard();
+    }
+
+    /// <summary>The right edge of a sidebar row: the keybind as a key chip —
+    /// in Red when this row's enable was just refused (see
+    /// <see cref="conflictRow"/>) — or, with no keybind set, a chromeless
+    /// button wearing the unset chip that starts capture for that row. The
+    /// chip styles have hit testing off, so a click on a chip lands on the
+    /// row and a click on the button lands on the button.</summary>
+    private FrameworkElement KeybindColumn(Binding b, int i)
+    {
+        if (!b.HasTrigger)
+        {
+            var set = new Button
+            {
+                Style = (Style)FindResource("GhostButton"),
+                Content = new ContentControl
+                {
+                    Content = "Set keybind",
+                    Style = (Style)FindResource("KeyChipUnset"),
+                },
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "Click, then press a key · Esc clears",
+                Tag = i,
+            };
+
+            // Built in code, so there is no x:Name to become the automation
+            // id: the id names the control, the name names the row it is in.
+            AutomationProperties.SetAutomationId(set, "SetKeybind");
+            AutomationProperties.SetName(set, $"Set keybind for {b.Macro.Name}");
+            set.Click += SetKeybind_Click;
+            return set;
+        }
+
+        return new ContentControl
+        {
+            Content = TriggerLabel(b),
+            Style = (Style)FindResource(i == conflictRow ? "KeyChipDanger" : "KeyChip"),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+    }
+
+    /// <summary>A row's "Set keybind": the row becomes the selection — capture
+    /// writes into the selected binding — and then the same flow the detail
+    /// panel's keybind button runs takes over.</summary>
+    private void SetKeybind_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: int i })
+            return;
+
+        BindingsList.SelectedIndex = i;
+        BeginTriggerCapture();
     }
 
     // ---- visual keyboard ----
