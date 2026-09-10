@@ -111,17 +111,31 @@ public partial class MainWindow : Window
         (armHotkeyKey, armHotkeyModifiers) = ParseHotkey(settings);
         UpdateHotkeyButton();
 
+        // A confirmation's 3 s are up: fade it out, then bring the base line
+        // back in its place. The base itself never fades away.
         statusFade.Tick += (_, _) =>
         {
             statusFade.Stop();
-            StatusText.BeginAnimation(
-                OpacityProperty,
-                new DoubleAnimation(0, TimeSpan.FromMilliseconds(400))
-            );
+            var token = statusToken;
+            var fadeOut = new DoubleAnimation(0, TimeSpan.FromMilliseconds(400));
+            fadeOut.Completed += (_, _) =>
+            {
+                if (token != statusToken)
+                    return; // a newer message took the bar mid-fade
+
+                statusOverlaid = false;
+                SetStatusText(BaseStatus, sticky: false);
+                StatusText.BeginAnimation(
+                    OpacityProperty,
+                    new DoubleAnimation(0, 1, TimeSpan.FromMilliseconds(400))
+                );
+            };
+            StatusText.BeginAnimation(OpacityProperty, fadeOut);
         };
 
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
+        RefreshBaseStatus(); // the bar opens on the base line, never blank
     }
 
     private sealed record ScreenRect(double Left, double Top, double Right, double Bottom);
@@ -145,7 +159,7 @@ public partial class MainWindow : Window
     // ---- arming ----
 
     // Set when Enable is refused (nothing to arm) so the resulting Unchecked
-    // reports "no macros enabled" instead of "disabled".
+    // reports "no macros enabled" instead of falling back to the base line.
     private bool decliningEnable;
 
     private async void ArmToggle_Checked(object sender, RoutedEventArgs e)
@@ -164,11 +178,11 @@ public partial class MainWindow : Window
         if (decliningEnable)
         {
             decliningEnable = false;
-            Status("no macros enabled");
+            Status("no macros enabled", sticky: true);
         }
         else
         {
-            Status("disabled");
+            RefreshBaseStatus(); // the base line already reads Off
         }
     }
 
@@ -218,7 +232,7 @@ public partial class MainWindow : Window
         }
 
         await hooks.ArmAsync(armable);
-        Status($"enabled · {armable.Length} {(armable.Length == 1 ? "macro" : "macros")} live");
+        RefreshBaseStatus(); // the base line counts what just went live
     }
 
     private void SaveAndRearm()
@@ -226,6 +240,10 @@ public partial class MainWindow : Window
         ConfigStore.Save(bindings);
         if (ArmToggle.IsChecked == true)
             _ = RearmAsync();
+
+        // The edit is a user action: the live count may have moved and any
+        // sticky error is now stale.
+        RefreshBaseStatus();
     }
 
     // ---- new macro ----
@@ -511,7 +529,10 @@ public partial class MainWindow : Window
         // the detail panel must keep showing the grabbed binding until the
         // drop commits the model.
         if (!refreshing && bindingsReorder is not { IsReordering: true })
+        {
             RefreshDetail();
+            RefreshBaseStatus(); // a new selection clears a stale conflict
+        }
     }
 
     // ---- rename (the name heading edits in place on click) ----
@@ -638,7 +659,8 @@ public partial class MainWindow : Window
             check.IsChecked = false;
             refreshing = false;
             Status(
-                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}"
+                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}",
+                sticky: true
             );
             return;
         }
@@ -861,7 +883,8 @@ public partial class MainWindow : Window
         if (holder >= 0)
         {
             Status(
-                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}"
+                $"uncheck {bindings[holder].Macro.Name} first — both use {TriggerLabel(bindings[i])}",
+                sticky: true
             );
             return;
         }
@@ -1406,7 +1429,7 @@ public partial class MainWindow : Window
             AppendRecordButton.Content = "Stop";
             AppendRecordButton.SetResourceReference(ForegroundProperty, "Red");
             AppendRecordButton.SetResourceReference(BorderBrushProperty, "Red");
-            Status("recording macro");
+            RefreshBaseStatus(); // the base line reads Recording from here
             return;
         }
 
@@ -1761,28 +1784,82 @@ public partial class MainWindow : Window
             _ => button.ToString(),
         };
 
-    // Status messages are transient by design: each fades out after a few
-    // seconds instead of lingering as stale text. Live state doesn't need
-    // words — the dot and rule below keep showing armed/recording.
+    // The bar reads in two tiers. The base line always names the true state
+    // and never fades; messages sit on top of it — confirmations for a few
+    // seconds, errors and conflicts until the next thing the user does.
     private readonly System.Windows.Threading.DispatcherTimer statusFade = new()
     {
         Interval = TimeSpan.FromSeconds(3),
     };
 
-    private void Status(string message)
+    // True while a confirmation owns the bar; the base line waits underneath.
+    private bool statusOverlaid;
+
+    // Bumped by every message, so a fade that finishes after a newer message
+    // arrived knows the bar is no longer its to restore.
+    private int statusToken;
+
+    /// <summary>The bar's resting text: what the app is doing right now. The
+    /// live count is the set <see cref="RearmAsync"/> arms.</summary>
+    private string BaseStatus
     {
-        StatusText.BeginAnimation(OpacityProperty, null); // cancel a fade in flight
-        StatusText.Opacity = 1;
-        StatusText.Text = message;
-        UpdateLiveIndicators();
+        get
+        {
+            if (hooks.IsRecording)
+                return "Recording";
+            if (ArmToggle.IsChecked != true)
+                return "Off";
+
+            var live = Armable().Length;
+            return $"On · {live} {(live == 1 ? "macro" : "macros")} live";
+        }
+    }
+
+    /// <summary>Puts a message over the base line. Confirmations fade back to
+    /// it after 3 s; <paramref name="sticky"/> ones — errors and conflicts —
+    /// stay in Red until the next message or the next base recompute.</summary>
+    private void Status(string message, bool sticky = false)
+    {
+        SetStatusText(message, sticky);
+        statusOverlaid = !sticky;
 
         statusFade.Stop(); // restart the 3 s clock for this message
-        statusFade.Start();
+        if (!sticky)
+            statusFade.Start();
+    }
+
+    /// <summary>Recomputes the base line: call it wherever arm state, the live
+    /// count, or recording changes. It replaces a sticky message (the state
+    /// moved on, so the error is stale) but waits under a confirmation until
+    /// that confirmation's 3 s are up.</summary>
+    private void RefreshBaseStatus()
+    {
+        if (statusOverlaid)
+        {
+            // The dot and rule still follow the state right away; the text
+            // lands on the new base when the confirmation fades.
+            UpdateLiveIndicators();
+            return;
+        }
+
+        statusFade.Stop();
+        SetStatusText(BaseStatus, sticky: false);
+    }
+
+    private void SetStatusText(string text, bool sticky)
+    {
+        statusToken++;
+        StatusText.BeginAnimation(OpacityProperty, null); // cancel a fade in flight
+        StatusText.Opacity = 1;
+        StatusText.Text = text;
+        StatusText.SetResourceReference(ForegroundProperty, sticky ? "Red" : "Subtext");
+        UpdateLiveIndicators();
     }
 
     /// <summary>The theme's "LED": the rule under the top bar and the status
     /// dot go amber while armed, red while recording, off when idle. Every
-    /// state change routes through <see cref="Status"/>, so this stays true.</summary>
+    /// state change routes through <see cref="Status"/> or
+    /// <see cref="RefreshBaseStatus"/>, so this stays true.</summary>
     private void UpdateLiveIndicators()
     {
         var (dot, rule) =
@@ -1890,7 +1967,10 @@ public partial class MainWindow : Window
             }
             else
             {
-                Status($"couldn't register {HotkeyLabel(key, modifiers)} — another app may own it");
+                Status(
+                    $"couldn't register {HotkeyLabel(key, modifiers)} — another app may own it",
+                    sticky: true
+                );
                 armHotkeyKey = Key.None;
                 armHotkeyModifiers = ModifierKeys.None;
             }
@@ -1982,7 +2062,8 @@ public partial class MainWindow : Window
         if (armHotkeyKey != Key.None && !TryRegisterArmHotkey())
         {
             Status(
-                $"couldn't register {HotkeyLabel(armHotkeyKey, armHotkeyModifiers)} — another app may own it"
+                $"couldn't register {HotkeyLabel(armHotkeyKey, armHotkeyModifiers)} — another app may own it",
+                sticky: true
             );
             armHotkeyKey = Key.None;
             armHotkeyModifiers = ModifierKeys.None;
