@@ -18,3 +18,12 @@ appsettings.local.json
 
 # Local planning notes (not published)
 PLAN.md
+
+# Local tooling (not published)
+.claude/
+.superpowers/
+.worktrees/
+.ruff_cache/
+
+# Logs
+*.log

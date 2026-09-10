@@ -85,7 +85,7 @@ Console.WriteLine($"  F10 starts/stops recording; the recording binds to F11 (on
 Console.WriteLine($"  config: {ConfigStore.DefaultPath}");
 Console.WriteLine("  bindings:");
 foreach (var b in bindings)
-    Console.WriteLine($"    {b.Trigger, -14} {b.Mode, -10} {b.Macro.Name}");
+    Console.WriteLine($"    {b.Trigger,-14} {b.Mode,-10} {b.Macro.Name}");
 Console.WriteLine("Armed keys are suppressed while this runs. Press Enter to quit.");
 
 _ = hook.RunAsync();

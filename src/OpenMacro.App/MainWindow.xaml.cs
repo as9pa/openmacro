@@ -480,7 +480,7 @@ public partial class MainWindow : Window
                         MouseTriggerCaptured(m.Button);
                         break;
 
-                    // Scrolls never arrive here (the hook ignores them).
+                        // Scrolls never arrive here (the hook ignores them).
                 }
             }
         );

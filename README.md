@@ -40,3 +40,14 @@ if you have dotnet download the `.zip`
 macros are stored in `%APPDATA%\openmacro\bindings.json`
 
 windows may warn on first run since the exe is unsigned — "more info" → "run anyway"
+
+# build
+
+needs the .NET 10 SDK.
+
+    dotnet build OpenMacro.slnx
+    dotnet test
+    dotnet run --project src\OpenMacro.App
+
+release builds are made with `dotnet publish src\OpenMacro.App -c Release -r win-x64 -p:PublishSingleFile=true`,
+with `--self-contained true` for the `.exe` and `--self-contained false` for the `-dotnet.zip`.

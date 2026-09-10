@@ -290,51 +290,51 @@ public sealed class MacroEngine : IAsyncDisposable
                     break;
 
                 case DelayEvent: // infinite — park until asked to stop
-                {
-                    // Without a trigger ("Run now") nothing could ever stop
-                    // it, so it completes immediately, like WaitForRelease.
-                    if (state is null)
-                        break;
-
-                    Task? stopped = null;
-                    lock (state)
                     {
-                        if (!state.StopRequested)
-                        {
-                            state.StopWaiter ??= new(
-                                TaskCreationOptions.RunContinuationsAsynchronously
-                            );
-                            stopped = state.StopWaiter.Task;
-                        }
-                    }
+                        // Without a trigger ("Run now") nothing could ever stop
+                        // it, so it completes immediately, like WaitForRelease.
+                        if (state is null)
+                            break;
 
-                    if (stopped is not null)
-                        await stopped.WaitAsync(hardStop.Token);
-                    break;
-                }
+                        Task? stopped = null;
+                        lock (state)
+                        {
+                            if (!state.StopRequested)
+                            {
+                                state.StopWaiter ??= new(
+                                    TaskCreationOptions.RunContinuationsAsynchronously
+                                );
+                                stopped = state.StopWaiter.Task;
+                            }
+                        }
+
+                        if (stopped is not null)
+                            await stopped.WaitAsync(hardStop.Token);
+                        break;
+                    }
 
                 case WaitForReleaseEvent:
-                {
-                    if (state is null)
-                        break;
-
-                    Task? released = null;
-                    lock (state)
                     {
-                        if (state.TriggerIsDown)
-                        {
-                            // One waiter per pause; TriggerUp completes it.
-                            state.ReleaseWaiter ??= new(
-                                TaskCreationOptions.RunContinuationsAsynchronously
-                            );
-                            released = state.ReleaseWaiter.Task;
-                        }
-                    }
+                        if (state is null)
+                            break;
 
-                    if (released is not null)
-                        await released.WaitAsync(hardStop.Token);
-                    break;
-                }
+                        Task? released = null;
+                        lock (state)
+                        {
+                            if (state.TriggerIsDown)
+                            {
+                                // One waiter per pause; TriggerUp completes it.
+                                state.ReleaseWaiter ??= new(
+                                    TaskCreationOptions.RunContinuationsAsynchronously
+                                );
+                                released = state.ReleaseWaiter.Task;
+                            }
+                        }
+
+                        if (released is not null)
+                            await released.WaitAsync(hardStop.Token);
+                        break;
+                    }
             }
         }
     }
