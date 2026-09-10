@@ -663,6 +663,11 @@ public partial class MainWindow : Window
         edge.BeginAnimation(SolidColorBrush.ColorProperty, settle);
     }
 
+    // Row whose enable was just refused: its trigger reads Red until the list
+    // is next rebuilt. Task 5 moves the mark onto the row's key chip; the flag
+    // is what stays put.
+    private int conflictRow = -1;
+
     private void EnabledChanged(object sender, RoutedEventArgs e)
     {
         if (refreshing || sender is not CheckBox { Tag: int i } check)
@@ -671,7 +676,7 @@ public partial class MainWindow : Window
         var enable = check.IsChecked == true;
 
         // Shared keybind: only one holder may be enabled — bounce the check
-        // back off and point at the one to uncheck first.
+        // back off, mark the row, and name the macro already holding it.
         var holder = enable
             ? EnabledHolderOf(bindings[i].Trigger, bindings[i].MouseTrigger, i)
             : -1;
@@ -680,8 +685,10 @@ public partial class MainWindow : Window
             refreshing = true; // reverting the box is not a user edit
             check.IsChecked = false;
             refreshing = false;
+            conflictRow = i;
+            RefreshBindingsList(Selected); // stamps the mark on the refused row
             Status(
-                $"uncheck {bindings[holder].Macro.Name} first · both use {TriggerLabel(bindings[i])}",
+                $"{TriggerLabel(bindings[i])} is already used by {bindings[holder].Macro.Name}",
                 sticky: true
             );
             return;
@@ -1694,9 +1701,19 @@ public partial class MainWindow : Window
                 );
             labels.Children.Add(nameRow);
 
-            var subtitle = MutedText(
-                $"{TriggerLabel(b)} · {ModeLabel(b)}"
-                    + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}")
+            // The trigger is a run of its own so a refused enable can turn
+            // that part alone Red (see conflictRow).
+            var trigger = new Run(TriggerLabel(b));
+            if (i == conflictRow)
+                trigger.SetResourceReference(TextElement.ForegroundProperty, "Red");
+
+            var subtitle = MutedText("");
+            subtitle.Inlines.Add(trigger);
+            subtitle.Inlines.Add(
+                new Run(
+                    $" · {ModeLabel(b)}"
+                        + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}")
+                )
             );
             subtitle.FontSize = 11;
             labels.Children.Add(subtitle);
@@ -1710,6 +1727,7 @@ public partial class MainWindow : Window
         }
 
         BindingsList.SelectedIndex = select;
+        conflictRow = -1; // the mark lives for exactly one rebuild
         refreshing = false;
         RefreshKeyboard();
     }
