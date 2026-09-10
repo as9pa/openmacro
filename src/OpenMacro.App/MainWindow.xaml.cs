@@ -648,22 +648,45 @@ public partial class MainWindow : Window
         RefreshBindingsList(i);
     }
 
+    // The Tag the TextBox template's last trigger watches for: while it is
+    // set, the box's chrome takes the control's own BorderBrush, so the flash
+    // below shows over the hover and focus borders (see Theme.xaml).
+    private const string RejectedTag = "Rejected";
+
+    // One brush and one token for the flash: a second rejection inside the
+    // 600 ms restarts the settle, and only the newest one puts the resting
+    // border back.
+    private readonly SolidColorBrush repeatFlash = new();
+    private int repeatFlashToken;
+
     /// <summary>The refusal, said without a message: the box's border lights
-    /// red and settles back to the hairline over 600 ms. The resting value
-    /// goes back as a resource reference, so a theme swap still repaints
-    /// it.</summary>
+    /// Red and settles back over 600 ms — onto the focus accent while the box
+    /// still has focus (the Enter path), onto the resting hairline once it
+    /// does not (the blur path), so the flash never ends in a jump. The
+    /// resting value goes back as a resource reference, so a theme swap still
+    /// repaints it.</summary>
     private void FlashRepeatBox()
     {
-        var edge = new SolidColorBrush(ThemeManager.Color("Red"));
-        RepeatBox.BorderBrush = edge;
+        var token = ++repeatFlashToken;
+
+        repeatFlash.BeginAnimation(SolidColorBrush.ColorProperty, null); // stop a flash in flight
+        repeatFlash.Color = ThemeManager.Color("Red");
+        RepeatBox.BorderBrush = repeatFlash;
+        RepeatBox.Tag = RejectedTag;
 
         var settle = new ColorAnimation(
-            ThemeManager.Color("Hairline"),
+            ThemeManager.Color(RepeatBox.IsKeyboardFocusWithin ? "Accent" : "Hairline"),
             TimeSpan.FromMilliseconds(600)
         );
         settle.Completed += (_, _) =>
+        {
+            if (token != repeatFlashToken)
+                return; // a newer flash owns the border
+
+            RepeatBox.ClearValue(TagProperty);
             RepeatBox.SetResourceReference(BorderBrushProperty, "Hairline");
-        edge.BeginAnimation(SolidColorBrush.ColorProperty, settle);
+        };
+        repeatFlash.BeginAnimation(SolidColorBrush.ColorProperty, settle);
     }
 
     // Row whose enable was just refused: its trigger reads Red until the list

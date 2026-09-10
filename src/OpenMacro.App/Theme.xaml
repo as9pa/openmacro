@@ -338,6 +338,15 @@
                         <Trigger Property="IsKeyboardFocusWithin" Value="True">
                             <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource Accent}"/>
                         </Trigger>
+                        <!-- Rejected input: the chrome takes the box's own
+                             BorderBrush, which the code animates from Red back
+                             to rest (see FlashRepeatBox). Last, so the flash
+                             shows whether or not the box still has focus. -->
+                        <Trigger Property="Tag" Value="Rejected">
+                            <Setter TargetName="Chrome" Property="BorderBrush"
+                                    Value="{Binding BorderBrush,
+                                            RelativeSource={RelativeSource TemplatedParent}}"/>
+                        </Trigger>
                         <Trigger Property="IsEnabled" Value="False">
                             <Setter Property="Opacity" Value="0.45"/>
                         </Trigger>
