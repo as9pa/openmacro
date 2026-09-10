@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Automation;
@@ -51,8 +52,11 @@ public partial class MainWindow : Window
         // bindings sidebar share the same machinery.
         eventsReorder = new ListReorder(
             EventsList,
-            // Never start a drag from inside an inline editor.
-            blocksDrag: Rows.IsWithin<TextBox>,
+            // Never start a drag from inside an inline editor, and never
+            // while the recording placeholder is on the end of the list: it
+            // is not a step, so a drop below it would ask the macro for a
+            // row it hasn't got.
+            blocksDrag: source => Rows.IsWithin<TextBox>(source) || RecordingRowShowing,
             commit: (sources, to) =>
             {
                 // A reorder renumbers the rows a pending Undo record points
@@ -78,7 +82,7 @@ public partial class MainWindow : Window
                 // Rebuild to restore the model's order and clear ghosting.
                 RefreshDetail();
                 foreach (var i in sources)
-                    if (i < EventsList.Items.Count)
+                    if (i < StepRowCount)
                         EventsList.SelectedItems.Add(EventsList.Items[i]);
             }
         );
@@ -991,22 +995,50 @@ public partial class MainWindow : Window
     }
 
     /// <summary>One row of the header's App box: the filter it writes (null is
-    /// "Anywhere"), the text it shows, and the app's icon when there is
-    /// one.</summary>
-    private sealed record AppChoice(string? App, string Label, ImageSource? Icon);
+    /// "Anywhere"), the name it shows, the qualifier that follows the name
+    /// (empty for every row but an app that isn't running), and the app's icon
+    /// when there is one. The two halves are kept apart because the closed box
+    /// is 150 px and a process name can outrun it: the name is the half that
+    /// gives way.</summary>
+    private sealed record AppChoice(string? App, string Name, string Suffix, ImageSource? Icon)
+    {
+        /// <summary>Both halves as one line: what type-ahead matches, what the
+        /// tooltip reads, and what a screen reader is given.</summary>
+        public string Label => Name + Suffix;
+    }
 
-    private static readonly AppChoice anywhere = new(null, "Anywhere", null);
+    private static readonly AppChoice anywhere = new(null, "Anywhere", "", null);
+
+    /// <summary>The qualifier that follows an app's name: empty while the app
+    /// has a process, " (not running)" when it has none. The closed box and
+    /// the drop-down both ask here, so the box cannot read one way before it
+    /// is opened and another after.</summary>
+    private static string AppSuffix(string app)
+    {
+        var processes = System.Diagnostics.Process.GetProcessesByName(app);
+        try
+        {
+            return processes.Length > 0 ? "" : " (not running)";
+        }
+        finally
+        {
+            foreach (var process in processes)
+                process.Dispose();
+        }
+    }
 
     /// <summary>What the closed box has to read before it is ever opened:
     /// "Anywhere" and, when this binding is filtered, the app it is filtered
-    /// to. Enumerating every running process waits for the drop-down (see
-    /// <see cref="AppBox_DropDownOpened"/>).</summary>
+    /// to. Enumerating every running process still waits for the drop-down
+    /// (see <see cref="AppBox_DropDownOpened"/>); this asks after the one app
+    /// the filter names, so the closed box already carries the qualifier the
+    /// list will give it.</summary>
     private void SyncAppBox(Binding b)
     {
         AppBox.Items.Clear();
         AppBox.Items.Add(anywhere);
         if (b.AppFilter is { } app)
-            AppBox.Items.Add(new AppChoice(app, app, GetAppIcon(app)));
+            AppBox.Items.Add(new AppChoice(app, app, AppSuffix(app), GetAppIcon(app)));
         AppBox.SelectedIndex = b.AppFilter is null ? 0 : 1;
     }
 
@@ -1025,14 +1057,16 @@ public partial class MainWindow : Window
         var listed = false;
         foreach (var (name, _) in RunningApps())
         {
-            choices.Add(new AppChoice(name, name, GetAppIcon(name)));
+            choices.Add(new AppChoice(name, name, "", GetAppIcon(name)));
             listed = string.Equals(current, name, StringComparison.OrdinalIgnoreCase) || listed;
         }
 
-        // Not running right now: still listed, so the filter is visible and
-        // stays selected. The icon can still come back from the disk cache.
+        // No window of its own right now: still listed, so the filter is
+        // visible and stays selected. Whether it is running at all is the
+        // helper's call, not this list's. The icon can still come back from
+        // the disk cache.
         if (current is not null && !listed)
-            choices.Add(new AppChoice(current, $"{current} (not running)", GetAppIcon(current)));
+            choices.Add(new AppChoice(current, current, AppSuffix(current), GetAppIcon(current)));
 
         refreshing = true; // rebuilding the list is not a user edit
         AppBox.Items.Clear();
@@ -1280,7 +1314,7 @@ public partial class MainWindow : Window
     private void EventsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         var at = Rows.IndexUnderMouse(EventsList, e.GetPosition(EventsList));
-        if (at < 0)
+        if (!IsStepRow(at))
             return;
 
         EventsList.SelectedIndex = at;
@@ -1370,7 +1404,7 @@ public partial class MainWindow : Window
             return;
 
         var parts = row.Children.OfType<StackPanel>().First();
-        var valueText = parts.Children.OfType<TextBlock>().First(t => Equals(t.Tag, ValueTag));
+        var (valueSlot, valueText) = ValuePart(parts);
 
         var box = new TextBox
         {
@@ -1385,8 +1419,8 @@ public partial class MainWindow : Window
             VerticalContentAlignment = VerticalAlignment.Center,
         };
 
-        var slot = parts.Children.IndexOf(valueText);
-        valueText.Visibility = Visibility.Collapsed;
+        var slot = parts.Children.IndexOf(valueSlot);
+        valueSlot.Visibility = Visibility.Collapsed;
         parts.Children.Insert(slot, box);
 
         var done = false;
@@ -1403,7 +1437,7 @@ public partial class MainWindow : Window
             else
             {
                 parts.Children.Remove(box);
-                valueText.Visibility = Visibility.Visible;
+                valueSlot.Visibility = Visibility.Visible;
                 EventsList.SelectedIndex = at;
             }
         }
@@ -1433,12 +1467,31 @@ public partial class MainWindow : Window
         box.Focus();
     }
 
+    /// <summary>A step row's value, both ways round: the tagged TextBlock, for
+    /// its text and its width, and the element that stands in the row for it,
+    /// which is either that TextBlock or the chip it sits in (see
+    /// <see cref="ValueElement"/>). Inline edit hides the latter and puts its
+    /// TextBox in that slot.</summary>
+    private static (UIElement Slot, TextBlock Text) ValuePart(StackPanel parts)
+    {
+        foreach (var child in parts.Children.OfType<UIElement>())
+        {
+            var text = child as TextBlock ?? (child as ContentControl)?.Content as TextBlock;
+            if (text is not null && Equals(text.Tag, ValueTag))
+                return (child, text);
+        }
+
+        throw new InvalidOperationException("step row has no value part");
+    }
+
     private void EventsList_RightClick(object sender, MouseButtonEventArgs e)
     {
         var at = Rows.IndexUnderMouse(EventsList, e.GetPosition(EventsList));
 
-        // Empty space is for inserting; rows are for editing.
-        if (at < 0)
+        // Empty space is for inserting; rows are for editing. The recording
+        // placeholder is no more editable than empty space, so it counts as
+        // some.
+        if (!IsStepRow(at))
         {
             EventsList.ContextMenu = BuildStepMenu("Insert", atEnd: true);
             return;
@@ -1619,7 +1672,7 @@ public partial class MainWindow : Window
         }
 
         EventsList.SelectedItems.Clear();
-        for (var i = start; i < start + length && i < EventsList.Items.Count; i++)
+        for (var i = start; i < start + length && i < StepRowCount; i++)
             EventsList.SelectedItems.Add(EventsList.Items[i]);
     }
 
@@ -1629,15 +1682,20 @@ public partial class MainWindow : Window
     {
         EventsList.SelectedItems.Clear();
         foreach (var i in indices)
-            if (i >= 0 && i < EventsList.Items.Count)
+            if (i >= 0 && i < StepRowCount)
                 EventsList.SelectedItems.Add(EventsList.Items[i]);
     }
 
+    /// <summary>The selected rows that are steps, ascending. The recording
+    /// placeholder can end up in the selection (Ctrl+A takes every row,
+    /// disabled or not) and it is not a step, so it never comes out of
+    /// here.</summary>
     private List<int> SelectedEventIndices()
     {
         var indices = new List<int>();
         foreach (var item in EventsList.SelectedItems)
-            indices.Add(EventsList.Items.IndexOf(item));
+            if (EventsList.Items.IndexOf(item) is var at && IsStepRow(at))
+                indices.Add(at);
         indices.Sort();
         return indices;
     }
@@ -1672,7 +1730,7 @@ public partial class MainWindow : Window
             for (var j = selected.Count - 1; j >= 0; j--)
                 events.RemoveAt(selected[j]);
         });
-        EventsList.SelectedIndex = Math.Min(selected[0], EventsList.Items.Count - 1);
+        EventsList.SelectedIndex = Math.Min(selected[0], StepRowCount - 1);
 
         // The binding as it stands after the removal: Undo looks it up by
         // value, so the sidebar may be in a different order by then.
@@ -1688,7 +1746,8 @@ public partial class MainWindow : Window
             return;
 
         var menu = BuildStepMenu("Add", atEnd: false);
-        menu.PlacementTarget = AddStepButton;
+        // Whichever button asked: the row of tools', or the empty timeline's.
+        menu.PlacementTarget = sender as UIElement ?? AddStepButton;
         menu.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
         menu.IsOpen = true;
     }
@@ -1746,13 +1805,12 @@ public partial class MainWindow : Window
         if (i < 0 || steps.Length == 0)
             return;
 
-        var at =
-            EventsList.SelectedIndex >= 0
-                ? EventsList.SelectedIndex + 1
-                : bindings[i].Macro.Events.Count;
+        var at = IsStepRow(EventsList.SelectedIndex)
+            ? EventsList.SelectedIndex + 1
+            : bindings[i].Macro.Events.Count;
 
         ReplaceEventsAt(i, events => events.InsertRange(at, steps));
-        EventsList.SelectedIndex = Math.Min(at + steps.Length - 1, EventsList.Items.Count - 1);
+        EventsList.SelectedIndex = Math.Min(at + steps.Length - 1, StepRowCount - 1);
     }
 
     // ---- append recording into an existing macro ----
@@ -1770,9 +1828,8 @@ public partial class MainWindow : Window
             // The click leaves keyboard focus on this button, and Space/Enter
             // activate a focused button — recording a Space would press Stop.
             Keyboard.ClearFocus();
-            AppendRecordButton.Content = "Stop";
-            AppendRecordButton.SetResourceReference(ForegroundProperty, "Red");
-            AppendRecordButton.SetResourceReference(BorderBrushProperty, "Red");
+            SyncRecordButtons(recording: true);
+            ShowRecordingRow();
             RefreshBaseStatus(); // the base line reads Recording from here
             return;
         }
@@ -1780,9 +1837,8 @@ public partial class MainWindow : Window
         var recorded = hooks.StopRecording("steps");
         var target = recordTargetIndex;
         recordTargetIndex = -1;
-        AppendRecordButton.Content = "Record";
-        AppendRecordButton.ClearValue(ForegroundProperty);
-        AppendRecordButton.ClearValue(BorderBrushProperty);
+        SyncRecordButtons(recording: false);
+        RemoveRecordingRow(); // the recorded steps land where it stood
 
         if (recorded.Events.Count == 0)
         {
@@ -1794,6 +1850,70 @@ public partial class MainWindow : Window
         Status($"added {recorded.Events.Count} steps");
     }
 
+    // Marks the one row of the timeline that no step answers to, so taking it
+    // back out never depends on where it sits.
+    private const string RecordingRowTag = "recording";
+
+    /// <summary>True while the placeholder is in the list: the row indices at
+    /// and past it mean nothing to the macro on show.</summary>
+    private bool RecordingRowShowing => recordTargetIndex >= 0 && recordTargetIndex == Selected;
+
+    /// <summary>Puts the placeholder on the end of the timeline: the number
+    /// the first recorded step will take, and what ends the recording. It
+    /// stands for steps the macro hasn't got yet, so it takes neither a click
+    /// nor the selection, and it only ever joins the list of the macro being
+    /// recorded into. <see cref="RefreshDetail"/> rebuilds from the model and
+    /// calls this last, so selecting another macro mid recording leaves the
+    /// placeholder behind, and selecting this one again brings it back.</summary>
+    private void ShowRecordingRow()
+    {
+        if (!RecordingRowShowing)
+            return;
+
+        EventsList.Items.Add(
+            new ListBoxItem
+            {
+                Content = BuildRecordingRow(EventsList.Items.Count + 1),
+                Tag = RecordingRowTag,
+                IsEnabled = false,
+                IsHitTestVisible = false,
+            }
+        );
+        UpdateEmptyStates(); // a row is a row: "No steps yet" stands down
+    }
+
+    /// <summary>Takes the placeholder back out, wherever in the list it ended
+    /// up.</summary>
+    private void RemoveRecordingRow()
+    {
+        for (var at = EventsList.Items.Count - 1; at >= 0; at--)
+            if (EventsList.Items[at] is ListBoxItem { Tag: RecordingRowTag })
+                EventsList.Items.RemoveAt(at);
+
+        UpdateEmptyStates();
+    }
+
+    /// <summary>Both Record buttons wear one face: the row of tools' and the
+    /// empty timeline's twin, which is the one on show while the macro has no
+    /// steps of its own. Recording turns them into Stop, in Red.</summary>
+    private void SyncRecordButtons(bool recording)
+    {
+        foreach (var button in new[] { AppendRecordButton, EmptyRecordButton })
+        {
+            button.Content = recording ? "Stop" : "Record";
+            if (recording)
+            {
+                button.SetResourceReference(ForegroundProperty, "Red");
+                button.SetResourceReference(BorderBrushProperty, "Red");
+            }
+            else
+            {
+                button.ClearValue(ForegroundProperty);
+                button.ClearValue(BorderBrushProperty);
+            }
+        }
+    }
+
     private void MoveUp_Click(object sender, RoutedEventArgs e) => MoveEvent(-1);
 
     private void MoveDown_Click(object sender, RoutedEventArgs e) => MoveEvent(+1);
@@ -1802,7 +1922,7 @@ public partial class MainWindow : Window
     {
         var from = EventsList.SelectedIndex;
         var to = from + direction;
-        if (SelectedEvent() is null || to < 0 || to >= EventsList.Items.Count)
+        if (SelectedEvent() is null || to < 0 || to >= StepRowCount)
             return;
 
         ReplaceEvents(events => (events[from], events[to]) = (events[to], events[from]));
@@ -1816,22 +1936,31 @@ public partial class MainWindow : Window
             return;
 
         ReplaceEvents(events => events.RemoveAt(at));
-        EventsList.SelectedIndex = Math.Min(at, EventsList.Items.Count - 1);
+        EventsList.SelectedIndex = Math.Min(at, StepRowCount - 1);
     }
 
     private MacroEvent? SelectedEvent()
     {
         var i = Selected;
         var at = EventsList.SelectedIndex;
-        return i >= 0 && at >= 0 ? bindings[i].Macro.Events[at] : null;
+        return i >= 0 && IsStepRow(at) ? bindings[i].Macro.Events[at] : null;
     }
+
+    /// <summary>How many rows of the timeline stand for a step. The recording
+    /// placeholder is a row and is not one of them, so wherever a row index
+    /// has to mean a step, this count bounds it and not the list's.</summary>
+    private int StepRowCount => Selected < 0 ? 0 : bindings[Selected].Macro.Events.Count;
+
+    /// <summary>True when a row of the timeline is a step of the macro on
+    /// show: everything the recording placeholder is not.</summary>
+    private bool IsStepRow(int at) => at >= 0 && at < StepRowCount;
 
     /// <summary>Mutates the selected binding's steps, preserving step selection.</summary>
     private void ReplaceEvents(Action<List<MacroEvent>> mutate)
     {
         var keepEventSelection = EventsList.SelectedIndex;
         ReplaceEventsAt(Selected, mutate);
-        EventsList.SelectedIndex = Math.Min(keepEventSelection, EventsList.Items.Count - 1);
+        EventsList.SelectedIndex = Math.Min(keepEventSelection, StepRowCount - 1);
     }
 
     /// <summary>
@@ -1964,6 +2093,7 @@ public partial class MainWindow : Window
 
         conflictRow = -1; // the mark lives for exactly one rebuild
         refreshing = false;
+        UpdateEmptyStates(); // how many macros there are decides the detail area
         RefreshKeyboard();
     }
 
@@ -2136,13 +2266,12 @@ public partial class MainWindow : Window
         if (i < 0)
         {
             DetailPanel.Visibility = Visibility.Collapsed;
-            EmptyState.Visibility = Visibility.Visible;
+            UpdateEmptyStates();
             return;
         }
 
         refreshing = true;
         DetailPanel.Visibility = Visibility.Visible;
-        EmptyState.Visibility = Visibility.Collapsed;
 
         var b = bindings[i];
         NameText.Text = b.Macro.Name;
@@ -2154,10 +2283,37 @@ public partial class MainWindow : Window
         SyncAppBox(b);
 
         EventsList.Items.Clear();
-        foreach (var macroEvent in b.Macro.Events)
-            EventsList.Items.Add(new ListBoxItem { Content = BuildStepRow(macroEvent) });
+        for (var step = 0; step < b.Macro.Events.Count; step++)
+            EventsList.Items.Add(
+                new ListBoxItem { Content = BuildStepRow(step + 1, b.Macro.Events[step]) }
+            );
+        UpdateTimelineSummary();
+        UpdateEmptyStates();
+
+        // The list is the model's again, and a recording in progress is not
+        // in the model yet: its placeholder goes back on the end.
+        ShowRecordingRow();
 
         refreshing = false;
+    }
+
+    /// <summary>Which of the three empty panels speaks. Nothing made yet is
+    /// the only one worth an instruction and a way out of it; with macros on
+    /// the left and none picked, the list beside it already says what to do,
+    /// so the detail area says one line and stops. The timeline's own panel
+    /// answers to the rows on show rather than to the macro's steps: the
+    /// recording placeholder is a row, and "No steps yet" under it would be
+    /// a lie.</summary>
+    private void UpdateEmptyStates()
+    {
+        var any = bindings.Count > 0;
+        EmptyNoMacros.Visibility = any ? Visibility.Collapsed : Visibility.Visible;
+        EmptyNoSelection.Visibility =
+            any && Selected < 0 ? Visibility.Visible : Visibility.Collapsed;
+        EmptyNoSteps.Visibility =
+            Selected >= 0 && EventsList.Items.Count == 0
+                ? Visibility.Visible
+                : Visibility.Collapsed;
     }
 
     /// <summary>The header's keybind, as the button's whole face: the key on a
@@ -2180,6 +2336,15 @@ public partial class MainWindow : Window
     // Marks the editable part of a step row (see BeginInlineEdit).
     private const string ValueTag = "value";
 
+    /// <summary>How a step's value is drawn: a key on a chip, a figure in
+    /// tabular numerals so a column of them lines up, or plain text.</summary>
+    private enum ValueFace
+    {
+        Plain,
+        Figure,
+        Chip,
+    }
+
     /// <summary>A muted TextBlock. The foreground is a resource reference, not
     /// a copied brush, so a theme change repaints it.</summary>
     private static TextBlock MutedText(string text)
@@ -2189,51 +2354,194 @@ public partial class MainWindow : Window
         return block;
     }
 
-    /// <summary>A timeline row: muted verb in a fixed column, then the value
-    /// (tagged so inline edit can swap just that part) with muted quotes/units
-    /// around it.</summary>
-    private Grid BuildStepRow(MacroEvent macroEvent)
+    /// <summary>A timeline row: the step number and the muted verb in fixed
+    /// columns, then the value (tagged so inline edit can swap just that part)
+    /// with muted quotes/units around it.</summary>
+    private Grid BuildStepRow(int number, MacroEvent macroEvent)
     {
-        var (verb, prefix, value, suffix) = DescribeParts(macroEvent);
+        var (verb, prefix, value, suffix, face) = DescribeParts(macroEvent);
 
-        var parts = new StackPanel { Orientation = Orientation.Horizontal };
+        var parts = new StackPanel
+        {
+            Orientation = Orientation.Horizontal,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
         if (prefix.Length > 0)
             parts.Children.Add(MutedText(prefix));
-        parts.Children.Add(new TextBlock { Text = value, Tag = ValueTag });
+        parts.Children.Add(ValueElement(value, face));
         if (suffix.Length > 0)
             parts.Children.Add(MutedText(suffix));
 
-        var row = new Grid();
-        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
-        row.ColumnDefinitions.Add(new ColumnDefinition());
+        var index = StepNumber(number);
+        index.SetResourceReference(TextBlock.ForegroundProperty, "Overlay0");
+
         var verbText = MutedText(verb);
-        Grid.SetColumn(parts, 1);
-        row.Children.Add(verbText);
-        row.Children.Add(parts);
+        verbText.VerticalAlignment = VerticalAlignment.Center;
+
+        return StepRowGrid(index, verbText, parts);
+    }
+
+    /// <summary>The row that stands in for a recording in progress: the number
+    /// the first recorded step will take, and how to end the recording, both
+    /// in Red on the columns every other row uses, so the number sits under
+    /// the one above it. The verb column stays empty, because what is being
+    /// recorded has no verb until it lands.</summary>
+    private static Grid BuildRecordingRow(int number)
+    {
+        var index = StepNumber(number);
+        index.SetResourceReference(TextBlock.ForegroundProperty, "Red");
+
+        var value = new TextBlock
+        {
+            Text = "recording · press Stop when done",
+            FontStyle = FontStyles.Italic,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        value.SetResourceReference(TextBlock.ForegroundProperty, "Red");
+
+        return StepRowGrid(index, new TextBlock(), value);
+    }
+
+    /// <summary>A row's number, right-aligned in tabular figures so single and
+    /// triple digits share one edge. The ink is the caller's: a step's number
+    /// is Overlay0, the recording placeholder's is Red.</summary>
+    private static TextBlock StepNumber(int number)
+    {
+        var index = new TextBlock
+        {
+            Text = number.ToString(),
+            FontSize = 11,
+            HorizontalAlignment = HorizontalAlignment.Right,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        Typography.SetNumeralAlignment(index, FontNumeralAlignment.Tabular);
+        return index;
+    }
+
+    /// <summary>The five columns every timeline row is built on: a 22 px
+    /// number and a 64 px verb 8 px apart, then the value taking the rest.
+    /// Shared, so the placeholder's number lines up with the steps'.</summary>
+    private static Grid StepRowGrid(UIElement index, UIElement verb, UIElement value)
+    {
+        var row = new Grid();
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(22) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(64) });
+        row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(8) });
+        row.ColumnDefinitions.Add(new ColumnDefinition());
+        Grid.SetColumn(verb, 2);
+        Grid.SetColumn(value, 4);
+        row.Children.Add(index);
+        row.Children.Add(verb);
+        row.Children.Add(value);
         return row;
     }
 
-    private static (string Verb, string Prefix, string Value, string Suffix) DescribeParts(
-        MacroEvent e
-    ) =>
+    /// <summary>The value part of a row. The TextBlock always carries
+    /// <see cref="ValueTag"/>, whichever face the value wears: a key on the
+    /// same chip the sidebar uses, a figure in tabular numerals, or plain
+    /// text.</summary>
+    private FrameworkElement ValueElement(string value, ValueFace face)
+    {
+        var text = new TextBlock { Text = value, Tag = ValueTag };
+        if (face == ValueFace.Figure)
+            Typography.SetNumeralAlignment(text, FontNumeralAlignment.Tabular);
+        if (face != ValueFace.Chip)
+            return text;
+
+        return new ContentControl
+        {
+            Content = text,
+            Style = (Style)FindResource("KeyChip"),
+            // The chip is taller than the line of text it replaces, and the
+            // same trick the inline editor uses keeps the row from growing
+            // under it: the vertical margins absorb the difference, so the
+            // chip asks for a text-sized slot and draws its full 20 px
+            // centred on it. A chip row is exactly as tall as a plain one.
+            Margin = new Thickness(0, -3, 0, -3),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+    }
+
+    private static (
+        string Verb,
+        string Prefix,
+        string Value,
+        string Suffix,
+        ValueFace Face
+    ) DescribeParts(MacroEvent e) =>
         e switch
         {
-            Engine.KeyDownEvent k => ("press", "", KeyName(k.Key), ""),
-            Engine.KeyUpEvent k => ("release", "", KeyName(k.Key), ""),
-            MouseDownEvent m => ("press", "", MouseName(m.Button), ""),
-            MouseUpEvent m => ("release", "", MouseName(m.Button), ""),
+            Engine.KeyDownEvent k => ("press", "", KeyName(k.Key), "", ValueFace.Chip),
+            Engine.KeyUpEvent k => ("release", "", KeyName(k.Key), "", ValueFace.Chip),
+            MouseDownEvent m => ("press", "", MouseName(m.Button), "", ValueFace.Chip),
+            MouseUpEvent m => ("release", "", MouseName(m.Button), "", ValueFace.Chip),
             ScrollEvent s => (
                 "scroll",
                 s.Direction == ScrollDirection.Up ? "up × " : "down × ",
                 s.Clicks.ToString(),
-                ""
+                "",
+                ValueFace.Figure
             ),
-            DelayEvent { Infinite: true } => ("wait", "", "∞", ""),
-            DelayEvent d => ("wait", "", d.Milliseconds.ToString(), " ms"),
-            TextEvent t => ("type", "“", t.Text, "”"),
-            WaitForReleaseEvent => ("wait", "", "until keybind released", ""),
-            _ => ("?", "", e.ToString() ?? "", ""),
+            DelayEvent { Infinite: true } => ("wait", "", "∞", "", ValueFace.Plain),
+            DelayEvent d => ("wait", "", d.Milliseconds.ToString(), " ms", ValueFace.Figure),
+            TextEvent t => ("type", "“", t.Text, "”", ValueFace.Plain),
+            WaitForReleaseEvent => ("wait", "", "until keybind released", "", ValueFace.Plain),
+            _ => ("?", "", e.ToString() ?? "", "", ValueFace.Plain),
         };
+
+    /// <summary>The step count and total wait beside the Timeline eyebrow.
+    /// Called from every rebuild of the list, since a step added or removed
+    /// changes both halves. With no steps it stays out of the way, and the
+    /// empty state speaks for the macro instead.</summary>
+    private void UpdateTimelineSummary()
+    {
+        var i = Selected;
+        if (i < 0 || bindings[i].Macro.Events.Count == 0)
+        {
+            TimelineSummary.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        TimelineSummary.Visibility = Visibility.Visible;
+        TimelineSummary.Text = TimelineSummaryText(bindings[i].Macro.Events);
+    }
+
+    /// <summary>How many steps, and how long their waits add up to:
+    /// milliseconds under a second, seconds to one decimal from there. One
+    /// infinite wait makes the whole length unknowable, so it stands for the
+    /// total. Invariant culture, so the decimal point matches the one the rows
+    /// below it show.</summary>
+    private static string TimelineSummaryText(IReadOnlyList<MacroEvent> events)
+    {
+        var total = 0L;
+        var infinite = false;
+        foreach (var e in events)
+            switch (e)
+            {
+                case DelayEvent { Infinite: true }:
+                    infinite = true;
+                    break;
+                case DelayEvent d:
+                    total += d.Milliseconds;
+                    break;
+            }
+
+        var count = $"{events.Count} {(events.Count == 1 ? "step" : "steps")}";
+
+        // A macro with no waits in it has no length to report: what the presses
+        // themselves cost happens on the far side of the hook. The count says
+        // everything there is to say, and "0 ms" would say something false.
+        if (!infinite && total == 0)
+            return count;
+
+        var length =
+            infinite ? "∞"
+            : total < 1000 ? $"{total} ms"
+            : $"{(total / 1000.0).ToString("0.0", CultureInfo.InvariantCulture)} s";
+
+        return $"{count} · {length}";
+    }
 
     private static string ScrollName(ScrollDirection direction) =>
         direction == ScrollDirection.Up ? "scroll up" : "scroll down";

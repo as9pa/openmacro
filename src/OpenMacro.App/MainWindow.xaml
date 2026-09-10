@@ -96,10 +96,28 @@
 
             <!-- Right: selected macro detail -->
             <Grid>
-                <TextBlock x:Name="EmptyState" Foreground="{DynamicResource Overlay0}"
-                           TextAlignment="Center" LineHeight="22"
+                <!-- Nothing made yet: the detail area says what a macro is
+                     for and offers the one move that leads anywhere. -->
+                <StackPanel x:Name="EmptyNoMacros" Visibility="Collapsed"
+                            HorizontalAlignment="Center" VerticalAlignment="Center">
+                    <TextBlock Text="No macros yet" FontSize="15"
+                               Foreground="{DynamicResource Text}"
+                               HorizontalAlignment="Center"/>
+                    <TextBlock Text="Create one, then record your keystrokes or add steps by hand."
+                               FontSize="12.5" Margin="0,4,0,0"
+                               Foreground="{DynamicResource Overlay0}"
+                               HorizontalAlignment="Center"/>
+                    <Button x:Name="EmptyNewMacroButton" Content="New macro"
+                            Margin="0,10,0,0" Padding="8,3"
+                            HorizontalAlignment="Center" Click="AddMacro_Click"/>
+                </StackPanel>
+
+                <!-- Macros exist and none is picked: one line, no advice.
+                     The list beside it is the advice. -->
+                <TextBlock x:Name="EmptyNoSelection" Visibility="Collapsed"
+                           Foreground="{DynamicResource Overlay0}"
                            HorizontalAlignment="Center" VerticalAlignment="Center"
-                           Text="Select a macro, or press + to create one."/>
+                           Text="Select a macro"/>
 
                 <Grid x:Name="DetailPanel" Margin="18,14,18,14" Visibility="Collapsed">
                     <Grid.RowDefinitions>
@@ -177,15 +195,44 @@
 
                     <!-- What the macro answers to, on one line under the title:
                          keybind, mode, and the app it is limited to. 6 px
-                         between a label and its control, 8 px between groups. -->
-                    <StackPanel Grid.Row="1" Orientation="Horizontal"
-                                HorizontalAlignment="Left" Margin="0,10,0,16">
-                        <TextBlock Text="Keybind" Foreground="{DynamicResource Subtext}"
+                         between a label and its control, 8 px between groups,
+                         carried by the margins so every control keeps the
+                         position it had when this was a stack.
+
+                         A Grid, because a stack cannot give way: everything up
+                         to the App label is Auto and sized by its content, and
+                         the App box takes the rest of the line. A long key name
+                         or the × times box now shortens the box instead of
+                         pushing it off the panel. -->
+                    <Grid Grid.Row="1" Margin="0,10,0,16">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <!-- The Repeat box's column. Collapsed in every mode
+                                 but "× times", and a collapsed control costs an
+                                 Auto column nothing, margin included. -->
+                            <ColumnDefinition Width="Auto"/>
+                            <ColumnDefinition Width="Auto"/>
+                            <!-- The App box takes what the line has left, but
+                                 no more than 220 px and no less than 120: the
+                                 bounds are the column's and not the box's,
+                                 because a stretched control that its own
+                                 MaxWidth cuts short is centred in the space it
+                                 was given, and the box would drift 37 px off
+                                 its label in the default window. Both figures
+                                 carry the box's 6 px margin, which lives
+                                 inside the column. -->
+                            <ColumnDefinition Width="*" MinWidth="126" MaxWidth="226"/>
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="Keybind"
+                                   Foreground="{DynamicResource Subtext}"
                                    VerticalAlignment="Center"/>
                         <!-- Chromeless: the chip is the whole button, and it is
                              the header's size on all three of its faces, so an
                              unset or refused keybind never resizes the row. -->
-                        <Button x:Name="TriggerButton" Margin="6,0,0,0"
+                        <Button Grid.Column="1" x:Name="TriggerButton" Margin="6,0,0,0"
                                 Style="{StaticResource GhostButton}"
                                 VerticalAlignment="Center"
                                 ToolTip="Click, then press a key · Esc cancels"
@@ -193,9 +240,10 @@
                             <ContentControl x:Name="TriggerChip"
                                             Style="{StaticResource KeyChipBig}"/>
                         </Button>
-                        <TextBlock Text="Mode" Foreground="{DynamicResource Subtext}"
+                        <TextBlock Grid.Column="2" Text="Mode"
+                                   Foreground="{DynamicResource Subtext}"
                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
-                        <ComboBox x:Name="ModeBox" Width="110" Margin="6,0,0,0"
+                        <ComboBox Grid.Column="3" x:Name="ModeBox" Width="110" Margin="6,0,0,0"
                                   VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
                             <ComboBoxItem Content="Once"/>
                             <ComboBoxItem Content="While held"/>
@@ -205,20 +253,26 @@
                         <!-- Only visible in "× times" mode. Commits on
                              Enter/focus-loss, not per keystroke, so a
                              half-typed "10" never saves as 1. -->
-                        <TextBox x:Name="RepeatBox" Width="44" Margin="6,0,0,0"
+                        <TextBox Grid.Column="4" x:Name="RepeatBox" Width="44" Margin="6,0,0,0"
                                  Visibility="Collapsed" TextAlignment="Center"
                                  VerticalContentAlignment="Center"
                                  ToolTip="How many times one press plays the macro"
                                  LostFocus="RepeatBox_LostFocus"
                                  KeyDown="RepeatBox_KeyDown"/>
-                        <TextBlock Text="App" Foreground="{DynamicResource Subtext}"
+                        <TextBlock Grid.Column="5" Text="App"
+                                   Foreground="{DynamicResource Subtext}"
                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
                         <!-- Items are data, not controls: a ComboBox shows the
                              selected item in the closed box as well as in the
                              list, and one visual cannot be in both places. The
                              list itself is built when the drop-down opens (see
-                             AppBox_DropDownOpened). -->
-                        <ComboBox x:Name="AppBox" Width="150" Margin="6,0,0,0"
+                             AppBox_DropDownOpened).
+
+                             220 px is the box's most, not its width (see the
+                             column): it fills what the line has left, so the
+                             controls before it never lose their room. -->
+                        <ComboBox Grid.Column="6" x:Name="AppBox" Margin="6,0,0,0"
+                                  HorizontalAlignment="Stretch"
                                   VerticalContentAlignment="Center"
                                   TextSearch.TextPath="Label"
                                   ToolTip="Limit this macro to one app · elsewhere the keybind types normally"
@@ -226,11 +280,15 @@
                                   SelectionChanged="AppBox_SelectionChanged">
                             <ComboBox.ItemTemplate>
                                 <DataTemplate>
-                                    <!-- A DockPanel, not a stack: the name has to
-                                         measure against the width that is left, or
-                                         a long process name clips instead of
-                                         ellipsizing. -->
-                                    <DockPanel>
+                                    <!-- A DockPanel, not a stack: the icon and
+                                         the qualifier take their width first, so
+                                         the name measures against what is left
+                                         and ellipsizes into it instead of
+                                         clipping. It shrink-wraps, so in the
+                                         drop-down, where the rows are as wide as
+                                         the widest, the qualifier still follows
+                                         the name instead of the row's edge. -->
+                                    <DockPanel HorizontalAlignment="Left">
                                         <Image DockPanel.Dock="Left"
                                                Width="14" Height="14" Margin="0,0,6,0"
                                                VerticalAlignment="Center"
@@ -249,7 +307,17 @@
                                                 </Style>
                                             </Image.Style>
                                         </Image>
-                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
+                                        <!-- Docked, so "(not running)" is not
+                                             what a long name pushes out of the
+                                             closed box: it is the reason the row
+                                             is in the list at all. In Overlay0,
+                                             because it is the app's state and
+                                             not part of its name. -->
+                                        <TextBlock DockPanel.Dock="Right"
+                                                   Text="{Binding Suffix}"
+                                                   Foreground="{DynamicResource Overlay0}"
+                                                   VerticalAlignment="Center"/>
+                                        <TextBlock Text="{Binding Name}" VerticalAlignment="Center"
                                                    TextTrimming="CharacterEllipsis"/>
                                     </DockPanel>
                                 </DataTemplate>
@@ -257,15 +325,23 @@
                             <ComboBox.ItemContainerStyle>
                                 <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
                                     <Setter Property="AutomationProperties.Name" Value="{Binding Label}"/>
+                                    <!-- Both halves, for the row whose name the
+                                         list is too narrow to spell out. -->
+                                    <Setter Property="ToolTip" Value="{Binding Label}"/>
                                 </Style>
                             </ComboBox.ItemContainerStyle>
                         </ComboBox>
-                    </StackPanel>
+                    </Grid>
 
                     <!-- timeline header + step tools (new steps insert after the
                          selected step, or at the end when nothing is selected) -->
                     <DockPanel Grid.Row="2" Margin="0,0,0,8">
                         <TextBlock Text="Timeline" Style="{StaticResource Eyebrow}"
+                                   VerticalAlignment="Center"/>
+                        <!-- Step count and how long the waits add up to, stamped
+                             by UpdateTimelineSummary; hidden with no steps. -->
+                        <TextBlock x:Name="TimelineSummary" Margin="8,0,0,0" FontSize="11.5"
+                                   Foreground="{DynamicResource Overlay0}"
                                    VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
                             <Button x:Name="AddStepButton" Padding="8,3" Click="AddStep_Click">
@@ -290,10 +366,49 @@
                     <Border Grid.Row="3" Background="{DynamicResource Surface0}"
                             BorderBrush="{DynamicResource Hairline}" BorderThickness="1"
                             CornerRadius="4" Padding="2,4">
-                        <ListBox x:Name="EventsList" SelectionMode="Extended"
-                                 MouseDoubleClick="EventsList_MouseDoubleClick"
-                                 PreviewMouseRightButtonDown="EventsList_RightClick"
-                                 KeyDown="EventsList_KeyDown"/>
+                        <Grid>
+                            <ListBox x:Name="EventsList" SelectionMode="Extended"
+                                     MouseDoubleClick="EventsList_MouseDoubleClick"
+                                     PreviewMouseRightButtonDown="EventsList_RightClick"
+                                     KeyDown="EventsList_KeyDown"/>
+                            <!-- Over the list rather than in it, and hit by
+                                 nothing but its two buttons: a text block
+                                 without a background takes no clicks, so
+                                 right-clicking the empty timeline still opens
+                                 the insert menu underneath. -->
+                            <StackPanel x:Name="EmptyNoSteps" Visibility="Collapsed"
+                                        HorizontalAlignment="Center" VerticalAlignment="Center">
+                                <TextBlock Text="No steps yet" FontSize="14"
+                                           Foreground="{DynamicResource Text}"
+                                           HorizontalAlignment="Center"/>
+                                <TextBlock Text="Record your keystrokes, or add steps one at a time."
+                                           FontSize="12" Margin="0,4,0,0"
+                                           Foreground="{DynamicResource Overlay0}"
+                                           HorizontalAlignment="Center"/>
+                                <!-- The same two actions the row of tools
+                                     above carries, at the same size. -->
+                                <StackPanel Orientation="Horizontal" Margin="0,10,0,0"
+                                            HorizontalAlignment="Center">
+                                    <Button x:Name="EmptyRecordButton" Content="Record"
+                                            Padding="8,3"
+                                            ToolTip="Record input into this macro"
+                                            Click="AppendRecord_Click"/>
+                                    <!-- The same chevron the row of tools'
+                                         Add wears, drawn the same way. -->
+                                    <Button x:Name="EmptyAddStepButton"
+                                            Margin="6,0,0,0" Padding="8,3"
+                                            Click="AddStep_Click">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="Add step"/>
+                                            <Path Data="M 0,0 L 3.5,4 L 7,0" Margin="6,1,0,0"
+                                                  VerticalAlignment="Center"
+                                                  Stroke="{DynamicResource Subtext}" StrokeThickness="1.4"
+                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                        </StackPanel>
+                                    </Button>
+                                </StackPanel>
+                            </StackPanel>
+                        </Grid>
                     </Border>
                 </Grid>
             </Grid>
