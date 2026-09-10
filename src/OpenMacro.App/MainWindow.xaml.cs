@@ -633,6 +633,7 @@ public partial class MainWindow : Window
         if (!int.TryParse(RepeatBox.Text, out var count) || count < 1 || count > 100_000)
         {
             RepeatBox.Text = Math.Max(1, bindings[i].RepeatCount).ToString();
+            FlashRepeatBox();
             return;
         }
 
@@ -642,6 +643,24 @@ public partial class MainWindow : Window
         bindings[i] = bindings[i] with { RepeatCount = count };
         SaveAndRearm();
         RefreshBindingsList(i);
+    }
+
+    /// <summary>The refusal, said without a message: the box's border lights
+    /// red and settles back to the hairline over 600 ms. The resting value
+    /// goes back as a resource reference, so a theme swap still repaints
+    /// it.</summary>
+    private void FlashRepeatBox()
+    {
+        var edge = new SolidColorBrush(ThemeManager.Color("Red"));
+        RepeatBox.BorderBrush = edge;
+
+        var settle = new ColorAnimation(
+            ThemeManager.Color("Hairline"),
+            TimeSpan.FromMilliseconds(600)
+        );
+        settle.Completed += (_, _) =>
+            RepeatBox.SetResourceReference(BorderBrushProperty, "Hairline");
+        edge.BeginAnimation(SolidColorBrush.ColorProperty, settle);
     }
 
     private void EnabledChanged(object sender, RoutedEventArgs e)
