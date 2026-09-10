@@ -498,7 +498,7 @@ public partial class MainWindow : Window
         Status(
             holder < 0
                 ? $"keybind set · {KeyName(key)}"
-                : $"keybind set · uncheck {bindings[holder].Macro.Name} to enable this one"
+                : $"keybind set · {TriggerTakenBy(i, holder)}"
         );
     }
 
@@ -523,7 +523,7 @@ public partial class MainWindow : Window
         Status(
             holder < 0
                 ? $"keybind set · {MouseName(button)}"
-                : $"keybind set · uncheck {bindings[holder].Macro.Name} to enable this one"
+                : $"keybind set · {TriggerTakenBy(i, holder)}"
         );
     }
 
@@ -713,16 +713,19 @@ public partial class MainWindow : Window
             refreshing = false;
             conflictRow = i;
             RefreshBindingsList(Selected); // stamps the mark on the refused row
-            Status(
-                $"{TriggerLabel(bindings[i])} is already used by {bindings[holder].Macro.Name}",
-                sticky: true
-            );
+            Status(TriggerTakenBy(i, holder), sticky: true);
             return;
         }
 
         bindings[i] = bindings[i] with { Enabled = enable };
         SaveAndRearm();
     }
+
+    /// <summary>The shared-keybind refusal, in the one wording every path
+    /// that refuses an enable uses: the trigger, then the macro already
+    /// holding it.</summary>
+    private string TriggerTakenBy(int refused, int holder) =>
+        $"{TriggerLabel(bindings[refused])} is already used by {bindings[holder].Macro.Name}";
 
     private void BindingsList_RightClick(object sender, MouseButtonEventArgs e)
     {
@@ -937,10 +940,11 @@ public partial class MainWindow : Window
             : -1;
         if (holder >= 0)
         {
-            Status(
-                $"uncheck {bindings[holder].Macro.Name} first · both use {TriggerLabel(bindings[i])}",
-                sticky: true
-            );
+            // Same refusal as the checkbox path, so the same mark and the
+            // same message.
+            conflictRow = i;
+            RefreshBindingsList(Selected);
+            Status(TriggerTakenBy(i, holder), sticky: true);
             return;
         }
 
