@@ -8,6 +8,13 @@
     <PackageReference Include="Hardcodet.NotifyIcon.Wpf" Version="2.0.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- The two tray icons, off and on. Resource rather than EmbeddedResource:
+         Application.GetResourceStream takes the path as written here. -->
+    <Resource Include="Assets\tray-off.ico" />
+    <Resource Include="Assets\tray-on.ico" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
     <AssemblyName>openmacro</AssemblyName>
