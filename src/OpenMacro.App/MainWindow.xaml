@@ -34,8 +34,16 @@
                                    VerticalAlignment="Center"/>
                         <Button x:Name="HotkeyButton" Margin="6,0,0,0"
                                 Style="{StaticResource GhostButton}"
-                                ToolTip="Global hotkey that toggles Enable. Works while the app is in the tray · click, then press a key · Esc clears"
+                                ToolTip="Global hotkey that toggles Enable. Works while the app is in the tray · click, then press a key · Esc cancels · right-click to clear"
                                 Click="HotkeyButton_Click">
+                            <Button.ContextMenu>
+                                <!-- The hotkey's only way out, now that Esc
+                                     cancels the capture instead of clearing. -->
+                                <ContextMenu>
+                                    <MenuItem x:Name="ClearHotkeyItem" Header="Clear hotkey"
+                                              Click="ClearHotkey_Click"/>
+                                </ContextMenu>
+                            </Button.ContextMenu>
                             <ContentControl x:Name="HotkeyChip" Style="{StaticResource KeyChip}"/>
                         </Button>
                     </StackPanel>
@@ -97,41 +105,28 @@
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto"/>
                         <RowDefinition Height="Auto"/>
+                        <RowDefinition Height="Auto"/>
                         <RowDefinition Height="*"/>
                     </Grid.RowDefinitions>
 
-                    <!-- name (click to rename) / keybind / mode -->
-                    <DockPanel Grid.Row="0" Margin="0,0,0,14">
-                        <StackPanel DockPanel.Dock="Right" Orientation="Horizontal"
-                                    VerticalAlignment="Center">
-                            <TextBlock Text="Keybind" Foreground="{DynamicResource Subtext}"
-                                       VerticalAlignment="Center"/>
-                            <!-- Asymmetric padding: key names carry more leading than
-                                 trailing side-bearing, so the ink sits right of true
-                                 center — this nudges it back to optical center. -->
-                            <Button x:Name="TriggerButton" Margin="6,0,0,0" MinWidth="64"
-                                    Padding="11,5,13,5"
-                                    ToolTip="Click, then press a key · Esc clears"
-                                    Click="TriggerButton_Click"/>
-                            <TextBlock Text="Mode" Foreground="{DynamicResource Subtext}"
-                                       Margin="14,0,0,0" VerticalAlignment="Center"/>
-                            <ComboBox x:Name="ModeBox" Width="110" Margin="6,0,0,0"
-                                      VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
-                                <ComboBoxItem Content="Once"/>
-                                <ComboBoxItem Content="While held"/>
-                                <ComboBoxItem Content="Toggle"/>
-                                <ComboBoxItem Content="× times"/>
-                            </ComboBox>
-                            <!-- Only visible in "× times" mode. Commits on
-                                 Enter/focus-loss, not per keystroke, so a
-                                 half-typed "10" never saves as 1. -->
-                            <TextBox x:Name="RepeatBox" Width="44" Margin="6,0,0,0"
-                                     Visibility="Collapsed" TextAlignment="Center"
-                                     VerticalContentAlignment="Center"
-                                     ToolTip="How many times one press plays the macro"
-                                     LostFocus="RepeatBox_LostFocus"
-                                     KeyDown="RepeatBox_KeyDown"/>
-                        </StackPanel>
+                    <!-- name (click to rename) + everything else this macro can
+                         do, behind the overflow dots -->
+                    <DockPanel Grid.Row="0">
+                        <Button x:Name="MoreButton" DockPanel.Dock="Right"
+                                Style="{StaticResource OverflowButton}"
+                                VerticalAlignment="Center"
+                                AutomationProperties.Name="More actions"
+                                ToolTip="More actions"
+                                Click="MoreButton_Click">
+                            <!-- Three middle dots tracked 2 px apart. WPF has no
+                                 letter spacing, so the tracking is a margin and
+                                 each dot is its own block. -->
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="·"/>
+                                <TextBlock Text="·" Margin="2,0,0,0"/>
+                                <TextBlock Text="·" Margin="2,0,0,0"/>
+                            </StackPanel>
+                        </Button>
                         <!-- Generous transparent padding = a forgiving hover/click
                              target around the title. The underline is a separate
                              rectangle so it can fade in (TextDecorations can't). -->
@@ -180,9 +175,96 @@
                         </Border>
                     </DockPanel>
 
+                    <!-- What the macro answers to, on one line under the title:
+                         keybind, mode, and the app it is limited to. 6 px
+                         between a label and its control, 8 px between groups. -->
+                    <StackPanel Grid.Row="1" Orientation="Horizontal"
+                                HorizontalAlignment="Left" Margin="0,10,0,16">
+                        <TextBlock Text="Keybind" Foreground="{DynamicResource Subtext}"
+                                   VerticalAlignment="Center"/>
+                        <!-- Chromeless: the chip is the whole button, and it is
+                             the header's size on all three of its faces, so an
+                             unset or refused keybind never resizes the row. -->
+                        <Button x:Name="TriggerButton" Margin="6,0,0,0"
+                                Style="{StaticResource GhostButton}"
+                                VerticalAlignment="Center"
+                                ToolTip="Click, then press a key · Esc cancels"
+                                Click="TriggerButton_Click">
+                            <ContentControl x:Name="TriggerChip"
+                                            Style="{StaticResource KeyChipBig}"/>
+                        </Button>
+                        <TextBlock Text="Mode" Foreground="{DynamicResource Subtext}"
+                                   Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        <ComboBox x:Name="ModeBox" Width="110" Margin="6,0,0,0"
+                                  VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
+                            <ComboBoxItem Content="Once"/>
+                            <ComboBoxItem Content="While held"/>
+                            <ComboBoxItem Content="Toggle"/>
+                            <ComboBoxItem Content="× times"/>
+                        </ComboBox>
+                        <!-- Only visible in "× times" mode. Commits on
+                             Enter/focus-loss, not per keystroke, so a
+                             half-typed "10" never saves as 1. -->
+                        <TextBox x:Name="RepeatBox" Width="44" Margin="6,0,0,0"
+                                 Visibility="Collapsed" TextAlignment="Center"
+                                 VerticalContentAlignment="Center"
+                                 ToolTip="How many times one press plays the macro"
+                                 LostFocus="RepeatBox_LostFocus"
+                                 KeyDown="RepeatBox_KeyDown"/>
+                        <TextBlock Text="App" Foreground="{DynamicResource Subtext}"
+                                   Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        <!-- Items are data, not controls: a ComboBox shows the
+                             selected item in the closed box as well as in the
+                             list, and one visual cannot be in both places. The
+                             list itself is built when the drop-down opens (see
+                             AppBox_DropDownOpened). -->
+                        <ComboBox x:Name="AppBox" Width="150" Margin="6,0,0,0"
+                                  VerticalContentAlignment="Center"
+                                  TextSearch.TextPath="Label"
+                                  ToolTip="Limit this macro to one app · elsewhere the keybind types normally"
+                                  DropDownOpened="AppBox_DropDownOpened"
+                                  SelectionChanged="AppBox_SelectionChanged">
+                            <ComboBox.ItemTemplate>
+                                <DataTemplate>
+                                    <!-- A DockPanel, not a stack: the name has to
+                                         measure against the width that is left, or
+                                         a long process name clips instead of
+                                         ellipsizing. -->
+                                    <DockPanel>
+                                        <Image DockPanel.Dock="Left"
+                                               Width="14" Height="14" Margin="0,0,6,0"
+                                               VerticalAlignment="Center"
+                                               Source="{Binding Icon}">
+                                            <Image.Style>
+                                                <Style TargetType="Image">
+                                                    <Style.Triggers>
+                                                        <!-- No icon resolved: the name
+                                                             starts at the left edge
+                                                             instead of hanging off an
+                                                             empty slot. -->
+                                                        <DataTrigger Binding="{Binding Icon}" Value="{x:Null}">
+                                                            <Setter Property="Visibility" Value="Collapsed"/>
+                                                        </DataTrigger>
+                                                    </Style.Triggers>
+                                                </Style>
+                                            </Image.Style>
+                                        </Image>
+                                        <TextBlock Text="{Binding Label}" VerticalAlignment="Center"
+                                                   TextTrimming="CharacterEllipsis"/>
+                                    </DockPanel>
+                                </DataTemplate>
+                            </ComboBox.ItemTemplate>
+                            <ComboBox.ItemContainerStyle>
+                                <Style TargetType="ComboBoxItem" BasedOn="{StaticResource {x:Type ComboBoxItem}}">
+                                    <Setter Property="AutomationProperties.Name" Value="{Binding Label}"/>
+                                </Style>
+                            </ComboBox.ItemContainerStyle>
+                        </ComboBox>
+                    </StackPanel>
+
                     <!-- timeline header + step tools (new steps insert after the
                          selected step, or at the end when nothing is selected) -->
-                    <DockPanel Grid.Row="1" Margin="0,0,0,8">
+                    <DockPanel Grid.Row="2" Margin="0,0,0,8">
                         <TextBlock Text="Timeline" Style="{StaticResource Eyebrow}"
                                    VerticalAlignment="Center"/>
                         <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
@@ -205,7 +287,7 @@
                          live (wired in code by ListReorder), shift-click selects a
                          range, Delete deletes the selection, right-click a row for
                          edits or empty space for inserts -->
-                    <Border Grid.Row="2" Background="{DynamicResource Surface0}"
+                    <Border Grid.Row="3" Background="{DynamicResource Surface0}"
                             BorderBrush="{DynamicResource Hairline}" BorderThickness="1"
                             CornerRadius="4" Padding="2,4">
                         <ListBox x:Name="EventsList" SelectionMode="Extended"

@@ -1,7 +1,9 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 using System.Windows;
+using System.Windows.Automation;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Documents;
 using System.Windows.Input;
 using System.Windows.Interop;
@@ -83,8 +85,9 @@ public partial class MainWindow : Window
 
         bindingsReorder = new ListReorder(
             BindingsList,
-            // A press on the checkbox is a toggle, not a grab.
-            blocksDrag: Rows.IsWithin<CheckBox>,
+            // A press on the checkbox is a toggle and a press on the row's
+            // "Set keybind" is a click; neither is a grab.
+            blocksDrag: Rows.IsWithin<ButtonBase>,
             // Single-select list: the block is always exactly one row.
             commit: (sources, to) =>
             {
@@ -330,8 +333,9 @@ public partial class MainWindow : Window
     /// <summary>The trigger-capture counterpart of <see cref="CaptureKeyWithOverlay"/>:
     /// a key or a mouse button (not left click, not a scroll — the hook filters
     /// those out) sets the keybind. Esc reaches <paramref name="onInput"/> as a
-    /// key like any other — the flow reads it as "unassign". Clicking the scrim
-    /// (left click) cancels. <paramref name="onInput"/> runs on the UI thread.</summary>
+    /// key like any other, and the flow reads it as "cancel". Clicking the
+    /// scrim (left click) cancels too. <paramref name="onInput"/> runs on the
+    /// UI thread.</summary>
     private void CaptureTriggerWithOverlay(
         string prompt,
         string hint,
@@ -444,10 +448,10 @@ public partial class MainWindow : Window
         if (Selected < 0)
             return;
 
-        Status("press a key or mouse button · Esc clears");
+        Status("press a key or mouse button · Esc cancels");
         CaptureTriggerWithOverlay(
             "press a key or mouse button to set the keybind",
-            "Esc clears the keybind · left click is reserved",
+            "Esc cancels · left click is reserved",
             input =>
             {
                 switch (input)
@@ -472,20 +476,12 @@ public partial class MainWindow : Window
         if (i < 0)
             return;
 
-        // Esc is reserved as "unassign", so it can never be a trigger itself —
-        // clear the key trigger and any mouse trigger together.
+        // Esc is reserved as "never mind", so it can never be a trigger
+        // itself. The binding keeps the keybind it already had; unassigning
+        // is the menu's "Clear keybind" (see ClearSelectedKeybind).
         if (key == KeyCode.VcEscape)
         {
-            bindings[i] = bindings[i] with
-            {
-                Trigger = KeyCode.VcUndefined,
-                MouseTrigger = null,
-                Enabled = false,
-            };
-            SaveAndRearm();
-            RefreshBindingsList(i);
-            RefreshDetail();
-            Status("keybind cleared");
+            Status("cancelled");
             return;
         }
 
@@ -494,14 +490,17 @@ public partial class MainWindow : Window
         // A key trigger clears any mouse trigger the binding had.
         var holder = EnabledHolderOf(key, null, i);
         bindings[i] = bindings[i] with { Trigger = key, MouseTrigger = null, Enabled = holder < 0 };
+        if (holder >= 0)
+            conflictRow = i; // the refusal marks the row's chip, as elsewhere
         SaveAndRearm();
-        RefreshBindingsList(i);
+        // Detail first: the mark lives for exactly one list rebuild, and the
+        // header's chip has to read it before that rebuild clears it.
         RefreshDetail();
-        Status(
-            holder < 0
-                ? $"keybind set · {KeyName(key)}"
-                : $"keybind set · {TriggerTakenBy(i, holder)}"
-        );
+        RefreshBindingsList(i);
+        if (holder < 0)
+            Status($"keybind set · {KeyName(key)}");
+        else
+            Status($"keybind set · {TriggerTakenBy(i, holder)}", sticky: true);
     }
 
     private void MouseTriggerCaptured(MouseButton button)
@@ -519,14 +518,15 @@ public partial class MainWindow : Window
             MouseTrigger = button,
             Enabled = holder < 0,
         };
+        if (holder >= 0)
+            conflictRow = i; // same refusal, same mark
         SaveAndRearm();
+        RefreshDetail(); // before the rebuild clears the mark, as above
         RefreshBindingsList(i);
-        RefreshDetail();
-        Status(
-            holder < 0
-                ? $"keybind set · {MouseName(button)}"
-                : $"keybind set · {TriggerTakenBy(i, holder)}"
-        );
+        if (holder < 0)
+            Status($"keybind set · {MouseName(button)}");
+        else
+            Status($"keybind set · {TriggerTakenBy(i, holder)}", sticky: true);
     }
 
     // ---- binding edits ----
@@ -739,15 +739,29 @@ public partial class MainWindow : Window
         }
 
         BindingsList.SelectedIndex = i;
+        BindingsList.ContextMenu = BuildBindingMenu(i);
+    }
 
+    /// <summary>The one macro menu, opened by a right-click on a sidebar row
+    /// and by the detail header's overflow button. Every item acts on the
+    /// selected binding, so both callers select <paramref name="index"/>
+    /// first.</summary>
+    private ContextMenu BuildBindingMenu(int index)
+    {
         var menu = new ContextMenu();
         menu.Items.Add(MenuItemFor("Run now", RunSelectedBindingOnce));
         menu.Items.Add(new Separator());
         menu.Items.Add(MenuItemFor("Rename", StartNameEdit));
-        menu.Items.Add(MenuItemFor("Change trigger…", BeginTriggerCapture));
+        menu.Items.Add(MenuItemFor("Change keybind…", BeginTriggerCapture));
+
+        // Where unassigning lives now that Esc cancels a capture instead.
+        var clear = MenuItemFor("Clear keybind", ClearSelectedKeybind);
+        clear.IsEnabled = bindings[index].HasTrigger;
+        AutomationProperties.SetAutomationId(clear, "ClearKeybindItem");
+        menu.Items.Add(clear);
+
         menu.Items.Add(BuildAppFilterMenu());
         menu.Items.Add(MenuItemFor("Duplicate", DuplicateSelectedBinding));
-        menu.Items.Add(MenuItemFor("Delete", DeleteSelectedBinding));
         menu.Items.Add(new Separator());
         menu.Items.Add(
             MenuItemFor(
@@ -759,7 +773,49 @@ public partial class MainWindow : Window
                     )
             )
         );
-        BindingsList.ContextMenu = menu;
+        menu.Items.Add(new Separator());
+
+        // Last, alone, and in the alarm ink: the only item that destroys
+        // anything.
+        var delete = MenuItemFor("Delete", DeleteSelectedBinding);
+        delete.SetResourceReference(ForegroundProperty, "Red");
+        menu.Items.Add(delete);
+        return menu;
+    }
+
+    /// <summary>The detail header's overflow button: the same macro menu the
+    /// sidebar row opens, hung under the dots.</summary>
+    private void MoreButton_Click(object sender, RoutedEventArgs e)
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        var menu = BuildBindingMenu(i);
+        menu.Placement = PlacementMode.Bottom;
+        menu.PlacementTarget = MoreButton;
+        MoreButton.ContextMenu = menu; // the menu's parent, for the theme's sake
+        menu.IsOpen = true;
+    }
+
+    /// <summary>"Clear keybind": the binding gives up its keybind, and with it
+    /// any chance of firing, so it is force-disabled at the same time.</summary>
+    private void ClearSelectedKeybind()
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        bindings[i] = bindings[i] with
+        {
+            Trigger = KeyCode.VcUndefined,
+            MouseTrigger = null,
+            Enabled = false,
+        };
+        SaveAndRearm();
+        RefreshBindingsList(i);
+        RefreshDetail();
+        Status("keybind cleared");
     }
 
     /// <summary>"Only in app": limits the selected binding to firing while one
@@ -850,9 +906,10 @@ public partial class MainWindow : Window
         StringComparer.OrdinalIgnoreCase
     );
 
-    /// <summary>The filtered app's icon, from a currently running instance's
-    /// executable — null only when it isn't running or no instance yields a
-    /// path (the limited query even works on anti-cheat-protected games).</summary>
+    /// <summary>The filtered app's icon: from a currently running instance's
+    /// executable when there is one (the limited query even works on
+    /// anti-cheat-protected games), otherwise the copy a past session left in
+    /// the on-disk cache. Null only when neither has it.</summary>
     private static ImageSource? GetAppIcon(string processName)
     {
         if (appIconCache.TryGetValue(processName, out var cached))
@@ -870,17 +927,18 @@ public partial class MainWindow : Window
                 if (extracted is null)
                     continue;
 
+                // 32 px rather than the 14 the row shows: the same bitmap is
+                // what goes to the on-disk cache, and WPF scales it down.
                 var source = Imaging.CreateBitmapSourceFromHIcon(
                     extracted.Handle,
                     Int32Rect.Empty,
-                    BitmapSizeOptions.FromWidthAndHeight(16, 16)
+                    BitmapSizeOptions.FromWidthAndHeight(32, 32)
                 );
                 source.Freeze(); // usable from any thread, no live resource behind it
+                AppIconCache.Save(processName, source);
                 appIconCache[processName] = source;
                 return source;
             }
-
-            return null;
         }
         catch (Exception e)
             when (e
@@ -891,13 +949,21 @@ public partial class MainWindow : Window
                         or ArgumentException
             )
         {
-            return null;
+            // nothing readable while it runs, so try the cache too
         }
         finally
         {
             foreach (var process in processes)
                 process.Dispose();
         }
+
+        // No live instance to read the icon from: the copy a past session
+        // cached stands in, memoized for this session like a live hit.
+        if (AppIconCache.Load(processName) is not { } stored)
+            return null;
+
+        appIconCache[processName] = stored;
+        return stored;
     }
 
     private void SetAppFilter(string? app)
@@ -909,11 +975,81 @@ public partial class MainWindow : Window
         bindings[i] = bindings[i] with { AppFilter = app };
         SaveAndRearm();
         RefreshBindingsList(i);
+
+        // The header's App box follows the submenu too. Only the box, not the
+        // whole detail panel: a filter change is no reason to rebuild the
+        // timeline underneath it.
+        refreshing = true;
+        SyncAppBox(bindings[i]);
+        refreshing = false;
+
         Status(
             app is null
                 ? $"{bindings[i].Macro.Name} fires anywhere"
                 : $"{bindings[i].Macro.Name} fires only in {app}"
         );
+    }
+
+    /// <summary>One row of the header's App box: the filter it writes (null is
+    /// "Anywhere"), the text it shows, and the app's icon when there is
+    /// one.</summary>
+    private sealed record AppChoice(string? App, string Label, ImageSource? Icon);
+
+    private static readonly AppChoice anywhere = new(null, "Anywhere", null);
+
+    /// <summary>What the closed box has to read before it is ever opened:
+    /// "Anywhere" and, when this binding is filtered, the app it is filtered
+    /// to. Enumerating every running process waits for the drop-down (see
+    /// <see cref="AppBox_DropDownOpened"/>).</summary>
+    private void SyncAppBox(Binding b)
+    {
+        AppBox.Items.Clear();
+        AppBox.Items.Add(anywhere);
+        if (b.AppFilter is { } app)
+            AppBox.Items.Add(new AppChoice(app, app, GetAppIcon(app)));
+        AppBox.SelectedIndex = b.AppFilter is null ? 0 : 1;
+    }
+
+    /// <summary>The full list, built when the drop-down opens: "Anywhere",
+    /// every app with a window right now, and the filter itself when it names
+    /// an app that isn't running. The selection rides through the
+    /// rebuild.</summary>
+    private void AppBox_DropDownOpened(object sender, EventArgs e)
+    {
+        var i = Selected;
+        if (i < 0)
+            return;
+
+        var current = bindings[i].AppFilter;
+        var choices = new List<AppChoice> { anywhere };
+        var listed = false;
+        foreach (var (name, _) in RunningApps())
+        {
+            choices.Add(new AppChoice(name, name, GetAppIcon(name)));
+            listed = string.Equals(current, name, StringComparison.OrdinalIgnoreCase) || listed;
+        }
+
+        // Not running right now: still listed, so the filter is visible and
+        // stays selected. The icon can still come back from the disk cache.
+        if (current is not null && !listed)
+            choices.Add(new AppChoice(current, $"{current} (not running)", GetAppIcon(current)));
+
+        refreshing = true; // rebuilding the list is not a user edit
+        AppBox.Items.Clear();
+        foreach (var choice in choices)
+            AppBox.Items.Add(choice);
+        AppBox.SelectedItem = choices.First(c =>
+            string.Equals(c.App, current, StringComparison.OrdinalIgnoreCase)
+        );
+        refreshing = false;
+    }
+
+    private void AppBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (refreshing || Selected < 0 || AppBox.SelectedItem is not AppChoice choice)
+            return;
+
+        SetAppFilter(choice.App);
     }
 
     private void BindingsList_KeyDown(object sender, KeyEventArgs e)
@@ -928,8 +1064,8 @@ public partial class MainWindow : Window
     private void BindingsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
         // The checkbox already toggled on the clicks themselves — don't
-        // toggle a third time.
-        if (Rows.IsWithin<CheckBox>(e.OriginalSource))
+        // toggle a third time; "Set keybind" owns its own clicks too.
+        if (Rows.IsWithin<ButtonBase>(e.OriginalSource))
             return;
 
         var i = Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
@@ -1058,6 +1194,8 @@ public partial class MainWindow : Window
         statusFade.Stop(); // this message runs on the 8 s clock, not the 3 s one
 
         var undo = new Hyperlink(new Run("Undo")) { Style = (Style)FindResource("StatusLink") };
+        AutomationProperties.SetAutomationId(undo, "UndoLink");
+        AutomationProperties.SetName(undo, "Undo");
         undo.Click += (_, _) => RestoreUndo();
         StatusText.Inlines.Add(new Run(" · "));
         StatusText.Inlines.Add(undo);
@@ -1735,59 +1873,151 @@ public partial class MainWindow : Window
             check.Checked += EnabledChanged;
             check.Unchecked += EnabledChanged;
 
+            // The label block takes what the checkbox and the keybind leave.
             var labels = new StackPanel { Margin = new Thickness(8, 2, 0, 2) };
 
             // App-filtered macros carry the app's icon next to the name; when
             // the icon can't be resolved (app not running), the subtitle
             // spells the filter out instead.
             var icon = b.AppFilter is null ? null : GetAppIcon(b.AppFilter);
-            var nameRow = new StackPanel { Orientation = Orientation.Horizontal };
-            nameRow.Children.Add(
-                new TextBlock { Text = b.Macro.Name, FontWeight = FontWeights.SemiBold }
+
+            // Two columns, not a stack: both shrink-wrap, so the icon still
+            // sits 6 px after the name, and the name carries a MaxWidth of the
+            // label block's width less the room the icon reserves — a stack
+            // measures its children unbounded, and TextTrimming can only trim
+            // against a width. Short name: the cap never binds. Long name: the
+            // cap stops it and the ellipsis lands before the icon.
+            var nameRow = new Grid();
+            nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            nameRow.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            var name = new TextBlock
+            {
+                Text = b.Macro.Name,
+                FontWeight = FontWeights.SemiBold,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            name.SetBinding(
+                MaxWidthProperty,
+                new System.Windows.Data.Binding(nameof(ActualWidth))
+                {
+                    Source = labels,
+                    Converter = new SubtractConverter(),
+                    // The icon's 14 px and the 6 px that sets it off the name.
+                    ConverterParameter = icon is null ? 0d : 20d,
+                }
             );
+            // A disabled macro reads one ink step back, name and line under it.
+            name.SetResourceReference(TextBlock.ForegroundProperty, b.Enabled ? "Text" : "Subtext");
+            nameRow.Children.Add(name);
             if (icon is not null)
-                nameRow.Children.Add(
-                    new Image
-                    {
-                        Source = icon,
-                        Width = 14,
-                        Height = 14,
-                        Margin = new Thickness(6, 0, 0, 0),
-                        VerticalAlignment = VerticalAlignment.Center,
-                        ToolTip = $"only in {b.AppFilter}",
-                    }
-                );
+            {
+                var badge = new Image
+                {
+                    Source = icon,
+                    Width = 14,
+                    Height = 14,
+                    Margin = new Thickness(6, 0, 0, 0),
+                    VerticalAlignment = VerticalAlignment.Center,
+                    ToolTip = $"only in {b.AppFilter}",
+                };
+                Grid.SetColumn(badge, 1);
+                nameRow.Children.Add(badge);
+            }
+
             labels.Children.Add(nameRow);
 
-            // The trigger is a run of its own so a refused enable can turn
-            // that part alone Red (see conflictRow).
-            var trigger = new Run(TriggerLabel(b));
-            if (i == conflictRow)
-                trigger.SetResourceReference(TextElement.ForegroundProperty, "Red");
-
-            var subtitle = MutedText("");
-            subtitle.Inlines.Add(trigger);
-            subtitle.Inlines.Add(
-                new Run(
-                    $" · {ModeLabel(b)}"
-                        + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}")
-                )
+            // The keybind has moved to the chip, so the line under the name
+            // carries the mode — and the filtered app when no icon could.
+            var subtitle = new TextBlock
+            {
+                Text =
+                    ModeLabel(b)
+                    + (b.AppFilter is null || icon is not null ? "" : $" · {b.AppFilter}"),
+                FontSize = 11,
+                TextTrimming = TextTrimming.CharacterEllipsis,
+            };
+            subtitle.SetResourceReference(
+                TextBlock.ForegroundProperty,
+                b.Enabled ? "Subtext" : "Overlay0"
             );
-            subtitle.FontSize = 11;
             labels.Children.Add(subtitle);
 
             var row = new DockPanel { Margin = new Thickness(4, 2, 4, 2) };
             DockPanel.SetDock(check, Dock.Left);
             row.Children.Add(check);
-            row.Children.Add(labels);
+            var keybind = KeybindColumn(b, i);
+            DockPanel.SetDock(keybind, Dock.Right);
+            row.Children.Add(keybind);
+            row.Children.Add(labels); // last child: fills what the two leave
 
-            BindingsList.Items.Add(new ListBoxItem { Content = row });
+            BindingsList.Items.Add(new ListBoxItem { Content = row, MinHeight = 48 });
         }
 
         BindingsList.SelectedIndex = select;
+
+        // The header's chip wears whatever the selected row's chip wears, a
+        // refusal mark included, and loses it on the same rebuild the row
+        // does. Every path that refuses an enable ends up here, so this is
+        // the one place the two chips have to agree.
+        if (Selected >= 0)
+            SyncTriggerChip(bindings[Selected], Selected);
+
         conflictRow = -1; // the mark lives for exactly one rebuild
         refreshing = false;
         RefreshKeyboard();
+    }
+
+    /// <summary>The right edge of a sidebar row: the keybind as a key chip —
+    /// in Red when this row's enable was just refused (see
+    /// <see cref="conflictRow"/>) — or, with no keybind set, a chromeless
+    /// button wearing the unset chip that starts capture for that row. The
+    /// chip styles have hit testing off, so a click on a chip lands on the
+    /// row and a click on the button lands on the button.</summary>
+    private FrameworkElement KeybindColumn(Binding b, int i)
+    {
+        if (!b.HasTrigger)
+        {
+            var set = new Button
+            {
+                Style = (Style)FindResource("GhostButton"),
+                Content = new ContentControl
+                {
+                    Content = "Set keybind",
+                    Style = (Style)FindResource("KeyChipUnset"),
+                },
+                Margin = new Thickness(8, 0, 0, 0),
+                VerticalAlignment = VerticalAlignment.Center,
+                ToolTip = "Click, then press a key · Esc cancels",
+                Tag = i,
+            };
+
+            // Built in code, so there is no x:Name to become the automation
+            // id: the id names the control, the name names the row it is in.
+            AutomationProperties.SetAutomationId(set, "SetKeybind");
+            AutomationProperties.SetName(set, $"Set keybind for {b.Macro.Name}");
+            set.Click += SetKeybind_Click;
+            return set;
+        }
+
+        return new ContentControl
+        {
+            Content = TriggerLabel(b),
+            Style = (Style)FindResource(i == conflictRow ? "KeyChipDanger" : "KeyChip"),
+            Margin = new Thickness(8, 0, 0, 0),
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+    }
+
+    /// <summary>A row's "Set keybind": the row becomes the selection — capture
+    /// writes into the selected binding — and then the same flow the detail
+    /// panel's keybind button runs takes over.</summary>
+    private void SetKeybind_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button { Tag: int i })
+            return;
+
+        BindingsList.SelectedIndex = i;
+        BeginTriggerCapture();
     }
 
     // ---- visual keyboard ----
@@ -1918,15 +2148,33 @@ public partial class MainWindow : Window
         NameText.Text = b.Macro.Name;
         NameEditBox.Visibility = Visibility.Collapsed;
         NameText.Visibility = Visibility.Visible;
-        TriggerButton.Content = TriggerLabel(b);
+        SyncTriggerChip(b, i);
         ModeBox.SelectedIndex = (int)b.Mode;
         SyncRepeatBox(b);
+        SyncAppBox(b);
 
         EventsList.Items.Clear();
         foreach (var macroEvent in b.Macro.Events)
             EventsList.Items.Add(new ListBoxItem { Content = BuildStepRow(macroEvent) });
 
         refreshing = false;
+    }
+
+    /// <summary>The header's keybind, as the button's whole face: the key on a
+    /// big keycap, the dashed outline when nothing is bound, or Red when this
+    /// binding's keybind was just refused. The same three faces the sidebar
+    /// row wears (see <see cref="KeybindColumn"/>), all three at the header's
+    /// size, so the row never changes height under them. Style and text only:
+    /// cheap enough for the refusal paths that must not rebuild the detail
+    /// panel.</summary>
+    private void SyncTriggerChip(Binding b, int i)
+    {
+        TriggerChip.Content = b.HasTrigger ? TriggerLabel(b) : "Set keybind";
+        TriggerChip.Style = (Style)FindResource(
+            !b.HasTrigger ? "KeyChipBigUnset"
+            : i == conflictRow ? "KeyChipBigDanger"
+            : "KeyChipBig"
+        );
     }
 
     // Marks the editable part of a step row (see BeginInlineEdit).
@@ -2148,10 +2396,10 @@ public partial class MainWindow : Window
         // now), not via the global hook — no KeyCode→virtual-key mapping, and
         // no hook while disarmed.
         CapturePrompt.Text = "press a key to toggle Enable globally";
-        CaptureHint.Text = "modifiers count (e.g. Ctrl+F6) · Esc clears · click to cancel";
+        CaptureHint.Text = "modifiers count (e.g. Ctrl+F6) · Esc or a click cancels";
         hotkeyCapturing = true;
         ShowCaptureOverlay();
-        Status("press a key for the Enable hotkey · Esc clears");
+        Status("press a key for the Enable hotkey · Esc cancels");
     }
 
     private void Window_PreviewKeyDown(object sender, KeyEventArgs e)
@@ -2192,16 +2440,25 @@ public partial class MainWindow : Window
         e.Handled = true;
         hotkeyCapturing = false;
 
+        // The hotkey that was registered stays registered; unassigning is the
+        // button's own "Clear hotkey" (see ClearHotkey_Click).
         if (key == Key.Escape)
         {
             DismissCaptureOverlay(null);
-            ApplyArmHotkey(Key.None, ModifierKeys.None);
-            Status("hotkey cleared");
+            Status("cancelled");
             return;
         }
 
         DismissCaptureOverlay(HotkeyLabel(key, Keyboard.Modifiers));
         ApplyArmHotkey(key, Keyboard.Modifiers);
+    }
+
+    /// <summary>"Clear hotkey", off the button's right-click: Enable loses its
+    /// global key and can only be flipped from the window or the tray.</summary>
+    private void ClearHotkey_Click(object sender, RoutedEventArgs e)
+    {
+        ApplyArmHotkey(Key.None, ModifierKeys.None);
+        Status("hotkey cleared");
     }
 
     private void ApplyArmHotkey(Key key, ModifierKeys modifiers)
@@ -2279,6 +2536,7 @@ public partial class MainWindow : Window
         var hasHotkey = armHotkeyKey != Key.None;
         HotkeyChip.Content = hasHotkey ? HotkeyLabel(armHotkeyKey, armHotkeyModifiers) : "set";
         HotkeyChip.Style = (Style)FindResource(hasHotkey ? "KeyChip" : "KeyChipUnset");
+        ClearHotkeyItem.IsEnabled = hasHotkey; // nothing to clear without one
     }
 
     private nint HotkeyWndProc(nint hwnd, int msg, nint wParam, nint lParam, ref bool handled)
