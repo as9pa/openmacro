@@ -357,9 +357,19 @@
                                             Padding="8,3"
                                             ToolTip="Record input into this macro"
                                             Click="AppendRecord_Click"/>
-                                    <Button x:Name="EmptyAddStepButton" Content="Add step ▾"
+                                    <!-- The same chevron the row of tools'
+                                         Add wears, drawn the same way. -->
+                                    <Button x:Name="EmptyAddStepButton"
                                             Margin="6,0,0,0" Padding="8,3"
-                                            Click="AddStep_Click"/>
+                                            Click="AddStep_Click">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="Add step"/>
+                                            <Path Data="M 0,0 L 3.5,4 L 7,0" Margin="6,1,0,0"
+                                                  VerticalAlignment="Center"
+                                                  Stroke="{DynamicResource Subtext}" StrokeThickness="1.4"
+                                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round"/>
+                                        </StackPanel>
+                                    </Button>
                                 </StackPanel>
                             </StackPanel>
                         </Grid>
