@@ -5,7 +5,7 @@ namespace OpenMacro.App;
 
 // Key/modifier names are System.Windows.Input enum names ("F6",
 // "Control, Shift") so the file stays hand-editable, like bindings.json.
-// CheckForUpdates gates the launch and six-hourly GitHub release checks.
+// CheckForUpdates gates the launch, hourly and on-show GitHub release checks.
 public sealed record AppSettings(
     string? ArmHotkeyKey = null,
     string? ArmHotkeyModifiers = null,
