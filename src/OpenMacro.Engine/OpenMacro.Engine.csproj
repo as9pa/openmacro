@@ -10,4 +10,8 @@
     <PackageReference Include="SharpHook" Version="7.1.2" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="OpenMacro.Engine.Tests" />
+  </ItemGroup>
+
 </Project>
