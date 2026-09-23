@@ -202,17 +202,13 @@
                          A Grid, because a stack cannot give way: everything up
                          to the App label is Auto and sized by its content, and
                          the App box takes the rest of the line. A long key name
-                         or the × times box now shortens the box instead of
-                         pushing it off the panel. -->
+                         now shortens the box instead of pushing it off the
+                         panel. -->
                     <Grid Grid.Row="1" Margin="0,10,0,16">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
-                            <ColumnDefinition Width="Auto"/>
-                            <!-- The Repeat box's column. Collapsed in every mode
-                                 but "× times", and a collapsed control costs an
-                                 Auto column nothing, margin included. -->
                             <ColumnDefinition Width="Auto"/>
                             <ColumnDefinition Width="Auto"/>
                             <!-- The App box takes what the line has left, but
@@ -243,23 +239,42 @@
                         <TextBlock Grid.Column="2" Text="Mode"
                                    Foreground="{DynamicResource Subtext}"
                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
+                        <!-- 110 px in every mode, so the App box never moves.
+                             In "× times" mode the closed face reads "<count>
+                             times": RepeatFace goes in as the box's Tag, which
+                             the ComboBox template shows in place of the
+                             selected item (see SyncRepeatBox). The list keeps
+                             its four plain entries. -->
                         <ComboBox Grid.Column="3" x:Name="ModeBox" Width="110" Margin="6,0,0,0"
                                   VerticalContentAlignment="Center" SelectionChanged="ModeBox_SelectionChanged">
+                            <ComboBox.Tag>
+                                <!-- No fill, and "times" ignores the mouse: a
+                                     click anywhere but the digits falls through
+                                     to the toggle and opens the list. -->
+                                <DockPanel x:Name="RepeatFace">
+                                    <!-- Commits on Enter/focus-loss, not per
+                                         keystroke, so a half-typed "10" never
+                                         saves as 1. -->
+                                    <TextBox x:Name="RepeatBox" DockPanel.Dock="Left"
+                                             Style="{StaticResource FaceTextBox}"
+                                             MaxLength="6" VerticalAlignment="Center"
+                                             ToolTip="How many times one press plays the macro"
+                                             PreviewMouseDown="RepeatBox_PreviewMouseDown"
+                                             GotKeyboardFocus="RepeatBox_GotKeyboardFocus"
+                                             LostFocus="RepeatBox_LostFocus"
+                                             KeyDown="RepeatBox_KeyDown"/>
+                                    <TextBlock Text="times" Margin="3,0,0,0"
+                                               VerticalAlignment="Center"
+                                               TextTrimming="CharacterEllipsis"
+                                               IsHitTestVisible="False"/>
+                                </DockPanel>
+                            </ComboBox.Tag>
                             <ComboBoxItem Content="Once"/>
                             <ComboBoxItem Content="While held"/>
                             <ComboBoxItem Content="Toggle"/>
                             <ComboBoxItem Content="× times"/>
                         </ComboBox>
-                        <!-- Only visible in "× times" mode. Commits on
-                             Enter/focus-loss, not per keystroke, so a
-                             half-typed "10" never saves as 1. -->
-                        <TextBox Grid.Column="4" x:Name="RepeatBox" Width="44" Margin="6,0,0,0"
-                                 Visibility="Collapsed" TextAlignment="Center"
-                                 VerticalContentAlignment="Center"
-                                 ToolTip="How many times one press plays the macro"
-                                 LostFocus="RepeatBox_LostFocus"
-                                 KeyDown="RepeatBox_KeyDown"/>
-                        <TextBlock Grid.Column="5" Text="App"
+                        <TextBlock Grid.Column="4" Text="App"
                                    Foreground="{DynamicResource Subtext}"
                                    Margin="8,0,0,0" VerticalAlignment="Center"/>
                         <!-- Items are data, not controls: a ComboBox shows the
@@ -271,7 +286,7 @@
                              220 px is the box's most, not its width (see the
                              column): it fills what the line has left, so the
                              controls before it never lose their room. -->
-                        <ComboBox Grid.Column="6" x:Name="AppBox" Margin="6,0,0,0"
+                        <ComboBox Grid.Column="5" x:Name="AppBox" Margin="6,0,0,0"
                                   HorizontalAlignment="Stretch"
                                   VerticalContentAlignment="Center"
                                   TextSearch.TextPath="Label"
