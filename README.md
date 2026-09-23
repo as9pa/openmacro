@@ -51,3 +51,7 @@ needs the .NET 10 SDK.
 
 release builds are made with `dotnet publish src\OpenMacro.App -c Release -r win-x64 -p:PublishSingleFile=true`,
 with `--self-contained true` for the `.exe` and `--self-contained false` for the `-dotnet.zip`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
