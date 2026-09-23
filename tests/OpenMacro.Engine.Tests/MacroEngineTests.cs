@@ -82,7 +82,7 @@ public class MacroEngineTests
         await WaitUntilAsync(() => sink.Snapshot().Length >= 6); // at least 2 full cycles
         engine.TriggerUp(KeyCode.VcCapsLock);
 
-        await WaitUntilAsync(() => Stopped(sink));
+        await WaitUntilAsync(() => Stopped(engine, sink));
 
         var calls = sink.Snapshot();
         // Graceful stop: the last cycle ran to completion, so the final
@@ -106,7 +106,7 @@ public class MacroEngineTests
 
         engine.TriggerDown(KeyCode.VcCapsLock);
         engine.TriggerUp(KeyCode.VcCapsLock);
-        await WaitUntilAsync(() => Stopped(sink));
+        await WaitUntilAsync(() => Stopped(engine, sink));
 
         var calls = sink.Snapshot();
         Assert.Equal($"up:{KeyCode.VcA}", calls[^1]);
@@ -124,7 +124,7 @@ public class MacroEngineTests
         await WaitUntilAsync(() => sink.Snapshot().Length >= 3);
         engine.TriggerDown(KeyCode.VcCapsLock);
         engine.TriggerUp(KeyCode.VcCapsLock);
-        await WaitUntilAsync(() => Stopped(sink));
+        await WaitUntilAsync(() => Stopped(engine, sink));
         var afterStop = sink.Snapshot().Length;
 
         // Third press must start it again (stale stop flags would break this).
@@ -171,7 +171,7 @@ public class MacroEngineTests
 
         engine.TriggerDown(KeyCode.VcCapsLock);
         engine.TriggerUp(KeyCode.VcCapsLock);
-        await WaitUntilAsync(() => Stopped(sink));
+        await WaitUntilAsync(() => Stopped(engine, sink));
 
         var calls = sink.Snapshot();
         // Far fewer than 1000 cycles ran, the last one finished cleanly, and
@@ -199,7 +199,7 @@ public class MacroEngineTests
         engine.TriggerDown(KeyCode.VcCapsLock);
         engine.TriggerUp(KeyCode.VcCapsLock);
         await WaitUntilAsync(() => sink.Snapshot().Length >= 2);
-        await WaitUntilAsync(() => Stopped(sink));
+        await WaitUntilAsync(() => Stopped(engine, sink));
 
         // A fresh press starts a fresh batch of 2 (stale counters would break this).
         engine.TriggerDown(KeyCode.VcCapsLock);
@@ -380,7 +380,7 @@ public class MacroEngineTests
         Assert.Equal([$"down:{KeyCode.VcA}"], sink.Snapshot());
 
         engine.TriggerUp(KeyCode.VcCapsLock);
-        await WaitUntilAsync(() => Stopped(sink));
+        await WaitUntilAsync(() => Stopped(engine, sink));
         Assert.Equal([$"down:{KeyCode.VcA}", $"up:{KeyCode.VcA}"], sink.Snapshot());
     }
 
@@ -455,9 +455,19 @@ public class MacroEngineTests
         Assert.False(engine.TriggerUp(KeyCode.VcQ));
     }
 
-    private static bool Stopped(RecordingSink sink)
+    private static bool Stopped(MacroEngine engine, RecordingSink sink)
     {
-        // "Stopped" = no new output for ~3 cycle lengths.
+        // A sink-quiescence window alone races with playback: TriggerUp only
+        // completes a TCS (RunContinuationsAsynchronously), so the tail step
+        // resumes on a thread-pool thread on its own schedule and can still
+        // be about to append output when the quiet window elapses on a busy
+        // runner. state.IsRunning only flips false after the playback task's
+        // whole cycle — including that tail step — has finished, so checking
+        // it first guarantees any final output already landed; the quiet
+        // window after that is just extra insurance against a fresh run.
+        if (engine.IsAnyPlaybackRunning)
+            return false;
+
         var before = sink.Snapshot().Length;
         Thread.Sleep(100);
         return sink.Snapshot().Length == before;
@@ -596,7 +606,7 @@ public class MacroEngineTests
         await WaitUntilAsync(() => sink.Snapshot().Length >= 6); // at least 2 full cycles
         engine.MouseTriggerUp(MouseButton.Button4);
 
-        await WaitUntilAsync(() => Stopped(sink));
+        await WaitUntilAsync(() => Stopped(engine, sink));
 
         var calls = sink.Snapshot();
         // Graceful stop: the last cycle finished, so the final call is a key-up
