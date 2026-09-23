@@ -172,7 +172,7 @@
                              rectangle so it can fade in (TextDecorations can't). -->
                         <Border x:Name="NameHover" Background="Transparent" Padding="8,4"
                                 Margin="-8,-4,0,-4" HorizontalAlignment="Left"
-                                VerticalAlignment="Center" Cursor="IBeam"
+                                VerticalAlignment="Center" Cursor="Hand"
                                 ToolTip="Click to rename"
                                 MouseLeftButtonDown="NameText_Click">
                             <Grid>
@@ -455,7 +455,7 @@
              the center, its border breathing in the accent until the captured
              key stamps it. Shown/hidden in code (ShowCaptureOverlay); clicking
              anywhere cancels the capture. -->
-        <Grid x:Name="CaptureOverlay" Visibility="Collapsed" Opacity="0"
+        <Grid x:Name="CaptureOverlay" Visibility="Collapsed" Opacity="0" Cursor="Hand"
               MouseLeftButtonDown="CaptureOverlay_Click">
             <Grid.Background>
                 <SolidColorBrush Color="{DynamicResource BaseColor}" Opacity="0.72"/>
