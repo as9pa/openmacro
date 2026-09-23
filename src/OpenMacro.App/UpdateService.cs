@@ -33,7 +33,7 @@ public enum UpdateCheckOutcome
 /// <summary>
 /// Reads the latest GitHub release, downloads its single-file exe on request,
 /// and swaps it in for the running one. Unauthenticated; the ETag is kept in
-/// memory so the six-hourly re-check is a free 304 when nothing changed.
+/// memory so the hourly re-check is a free 304 when nothing changed.
 /// </summary>
 public sealed class UpdateService : IDisposable
 {

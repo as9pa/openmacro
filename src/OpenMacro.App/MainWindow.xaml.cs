@@ -1,4 +1,5 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.Globalization;
 using System.Runtime.InteropServices;
 using System.Windows;
@@ -2817,6 +2818,21 @@ public partial class MainWindow : Window
         Show();
         WindowState = WindowState.Normal;
         Activate();
+        CheckForUpdatesIfStale();
+    }
+
+    /// <summary>An automatic check when the window is brought back and the
+    /// last one is older than <see cref="UpdateRecheckOnShowAfter"/>, so a
+    /// release that landed while the app sat in the tray shows up on the
+    /// bar without waiting for the hourly tick.</summary>
+    private void CheckForUpdatesIfStale()
+    {
+        if (!settings.CheckForUpdates || lastUpdateCheck == 0)
+            return;
+        if (Stopwatch.GetElapsedTime(lastUpdateCheck) < UpdateRecheckOnShowAfter)
+            return;
+
+        _ = CheckForUpdatesAsync(manual: false);
     }
 
     protected override void OnStateChanged(EventArgs e)
@@ -3250,14 +3266,17 @@ public partial class MainWindow : Window
 
     // ---- updates ----
     // A notice at the right end of the bar, never a dialog. Checks run a few
-    // seconds after launch and every six hours after, while the setting is
-    // on; the download waits for the user's click.
+    // seconds after launch, every hour after, and when the window comes back
+    // from the tray with the last check older than ten minutes, while the
+    // setting is on; the download waits for the user's click.
 
     private static readonly TimeSpan UpdateFirstCheckDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(1);
+    private static readonly TimeSpan UpdateRecheckOnShowAfter = TimeSpan.FromMinutes(10);
 
     private readonly UpdateService updates = new();
 
-    // First tick shortly after launch, then every six hours (see SetupUpdates).
+    // First tick shortly after launch, then hourly (see SetupUpdates).
     private readonly System.Windows.Threading.DispatcherTimer updateTimer = new()
     {
         Interval = UpdateFirstCheckDelay,
@@ -3272,11 +3291,14 @@ public partial class MainWindow : Window
     private bool updateChecking;
     private bool updateDownloading;
 
+    // Stopwatch timestamp of the last check that started; 0 before the first.
+    private long lastUpdateCheck;
+
     private void SetupUpdates()
     {
         updateTimer.Tick += (_, _) =>
         {
-            updateTimer.Interval = TimeSpan.FromHours(6);
+            updateTimer.Interval = UpdateCheckInterval;
             _ = CheckForUpdatesAsync(manual: false);
         };
         if (settings.CheckForUpdates)
@@ -3293,6 +3315,7 @@ public partial class MainWindow : Window
             return;
 
         updateChecking = true;
+        lastUpdateCheck = Stopwatch.GetTimestamp();
         try
         {
             var (outcome, release) = await updates.CheckAsync();
