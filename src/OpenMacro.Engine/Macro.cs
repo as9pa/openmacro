@@ -1,3 +1,4 @@
+using System.Security.Cryptography;
 using System.Text.Json.Serialization;
 using SharpHook.Data;
 
@@ -39,6 +40,17 @@ public sealed record Binding(
     MouseButton? MouseTrigger = null
 )
 {
+    /// <summary>Stable identity, eight hex characters. Every new binding gets
+    /// a fresh one; <c>with</c> keeps it, so an edit is still the same macro,
+    /// and a duplicate must assign <see cref="NewId"/> itself. Configs saved
+    /// before ids existed omit it; <see cref="ConfigStore"/> gives those one
+    /// on load and writes it back. Written first so it heads each file.</summary>
+    [JsonPropertyOrder(-1)]
+    public string Id { get; init; } = NewId();
+
+    public static string NewId() =>
+        Convert.ToHexString(RandomNumberGenerator.GetBytes(4)).ToLowerInvariant();
+
     /// <summary>True when this binding has any trigger set — a key or a mouse
     /// button — so it can be armed.</summary>
     [JsonIgnore]
