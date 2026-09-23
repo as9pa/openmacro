@@ -626,19 +626,53 @@ public partial class MainWindow : Window
         RefreshBindingsList(i);
     }
 
-    /// <summary>The count box rides along with the mode picker: visible (and
-    /// filled in) only while the binding is in Repeat mode.</summary>
+    /// <summary>The count lives on the mode picker's face: while the binding
+    /// is in Repeat mode the face slot (the box's Tag, see Theme.xaml) holds
+    /// "&lt;count&gt; times"; in every other mode it is empty and the face
+    /// shows the mode name.</summary>
     private void SyncRepeatBox(Binding b)
     {
-        RepeatBox.Visibility =
-            b.Mode == PlaybackMode.Repeat ? Visibility.Visible : Visibility.Collapsed;
+        ModeBox.Tag = b.Mode == PlaybackMode.Repeat ? RepeatFace : null;
         RepeatBox.Text = Math.Max(1, b.RepeatCount).ToString();
     }
 
+    private void RepeatBox_PreviewMouseDown(object sender, MouseButtonEventArgs e)
+    {
+        // The first click takes focus (and selects the digits) itself and
+        // stops there, so it never reaches the combo; once focused, clicks go
+        // through to place the caret.
+        if (RepeatBox.IsKeyboardFocusWithin)
+            return;
+
+        RepeatBox.Focus();
+        e.Handled = true;
+    }
+
+    // Tab or a click in: the digits come selected, so typing replaces them.
+    private void RepeatBox_GotKeyboardFocus(object sender, KeyboardFocusChangedEventArgs e) =>
+        RepeatBox.SelectAll();
+
     private void RepeatBox_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Enter)
-            CommitRepeatCount();
+        switch (e.Key)
+        {
+            case Key.Enter:
+                CommitRepeatCount();
+                e.Handled = true;
+                break;
+            case Key.Escape:
+                // Back to the saved count, nothing committed.
+                if (Selected >= 0)
+                    RepeatBox.Text = Math.Max(1, bindings[Selected].RepeatCount).ToString();
+                RepeatBox.SelectAll();
+                e.Handled = true;
+                break;
+            case Key.Up or Key.Down:
+                // Left to bubble, these would reach the combo and change the
+                // mode out from under the count being typed.
+                e.Handled = true;
+                break;
+        }
     }
 
     private void RepeatBox_LostFocus(object sender, RoutedEventArgs e) => CommitRepeatCount();
@@ -677,12 +711,12 @@ public partial class MainWindow : Window
     private readonly SolidColorBrush repeatFlash = new();
     private int repeatFlashToken;
 
-    /// <summary>The refusal, said without a message: the box's border lights
-    /// Red and settles back over 600 ms — onto the focus accent while the box
-    /// still has focus (the Enter path), onto the resting hairline once it
-    /// does not (the blur path), so the flash never ends in a jump. The
-    /// resting value goes back as a resource reference, so a theme swap still
-    /// repaints it.</summary>
+    /// <summary>The refusal, said without a message: the number's border
+    /// lights Red and settles back over 600 ms — onto the focus accent while
+    /// the box still has focus (the Enter path), fading out to the borderless
+    /// face once it does not (the blur path), so the flash never ends in a
+    /// jump. The resting value then goes back to the style's, so a theme swap
+    /// still repaints it.</summary>
     private void FlashRepeatBox()
     {
         var token = ++repeatFlashToken;
@@ -692,8 +726,12 @@ public partial class MainWindow : Window
         RepeatBox.BorderBrush = repeatFlash;
         RepeatBox.Tag = RejectedTag;
 
+        // At rest the number has no border: fade the Red out rather than
+        // toward Transparent's white, which would pass through pink.
+        var rest = ThemeManager.Color("Red");
+        rest.A = 0;
         var settle = new ColorAnimation(
-            ThemeManager.Color(RepeatBox.IsKeyboardFocusWithin ? "Accent" : "Hairline"),
+            RepeatBox.IsKeyboardFocusWithin ? ThemeManager.Color("Accent") : rest,
             TimeSpan.FromMilliseconds(600)
         );
         settle.Completed += (_, _) =>
@@ -702,7 +740,7 @@ public partial class MainWindow : Window
                 return; // a newer flash owns the border
 
             RepeatBox.ClearValue(TagProperty);
-            RepeatBox.SetResourceReference(BorderBrushProperty, "Hairline");
+            RepeatBox.ClearValue(BorderBrushProperty);
         };
         repeatFlash.BeginAnimation(SolidColorBrush.ColorProperty, settle);
     }
