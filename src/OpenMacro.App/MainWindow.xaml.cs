@@ -1155,7 +1155,13 @@ public partial class MainWindow : Window
 
     private void BindingsList_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Delete && Selected >= 0 && Keyboard.FocusedElement is not TextBox)
+        // Only a selection the list shows: one the app filter hides is in the
+        // detail pane, not under the user's eye in the list.
+        if (
+            e.Key == Key.Delete
+            && RowOf(Selected) >= 0
+            && Keyboard.FocusedElement is not TextBox
+        )
         {
             DeleteSelectedBinding();
             e.Handled = true;
@@ -1243,7 +1249,7 @@ public partial class MainWindow : Window
         var deleted = bindings[i];
         bindings.RemoveAt(i);
         SaveAndRearm();
-        RefreshBindingsList(Math.Min(i, bindings.Count - 1));
+        RefreshBindingsList(NearestShownBinding(i));
         RefreshDetail();
         OfferUndo(new Deletion(i, deleted, null, null), $"Deleted “{deleted.Macro.Name}”");
     }
@@ -2196,6 +2202,24 @@ public partial class MainWindow : Window
         refreshing = false;
         UpdateEmptyStates(); // how many macros there are decides the detail area
         RefreshKeyboard();
+    }
+
+    /// <summary>Where the selection goes after a delete at <paramref name="at"/>:
+    /// the next macro the list will show, else the previous one, else none.
+    /// A filter whose last macro just went falls back to All on the refresh,
+    /// so then every macro counts as shown.</summary>
+    private int NearestShownBinding(int at)
+    {
+        var filterStays = appFilterView is null || bindings.Exists(ShownByAppFilter);
+        bool Shown(int j) => !filterStays || ShownByAppFilter(bindings[j]);
+
+        for (var j = at; j < bindings.Count; j++)
+            if (Shown(j))
+                return j;
+        for (var j = Math.Min(at, bindings.Count) - 1; j >= 0; j--)
+            if (Shown(j))
+                return j;
+        return -1;
     }
 
     private bool ShownByAppFilter(Binding b) =>
