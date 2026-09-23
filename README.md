@@ -52,3 +52,7 @@ needs the .NET 10 SDK.
 release builds are made by `.github/workflows/release.yml` when a `v*` tag is pushed (the tag must match `<Version>` in the csproj).
 locally: `dotnet publish src\OpenMacro.App -c Release -p:PublishProfile=SingleFile` for the `.exe`
 and `-p:PublishProfile=FrameworkDependent` for the `-dotnet.zip`. each release also carries a `SHA256SUMS`.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
