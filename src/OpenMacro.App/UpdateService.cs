@@ -26,7 +26,7 @@ public enum UpdateCheckOutcome
     UpToDate,
     Available,
 
-    // 404, offline, rate-limited, unreadable: the caller says nothing.
+    // 404, offline, rate-limited, unreadable: only a manual check says so.
     Unavailable,
 }
 
@@ -117,7 +117,14 @@ public sealed class UpdateService : IDisposable
                 : (UpdateCheckOutcome.UpToDate, release);
         }
         catch (Exception e)
-            when (e is HttpRequestException or TaskCanceledException or JsonException)
+            when (
+                e
+                    is HttpRequestException
+                        or TaskCanceledException
+                        or JsonException
+                        // a field of the wrong JSON type
+                        or InvalidOperationException
+            )
         {
             return (UpdateCheckOutcome.Unavailable, null);
         }

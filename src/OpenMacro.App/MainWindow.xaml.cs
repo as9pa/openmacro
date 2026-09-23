@@ -2786,8 +2786,9 @@ public partial class MainWindow : Window
     }
 
     /// <summary>Asks GitHub for the latest release and puts it in the notice
-    /// if it's newer. A <paramref name="manual"/> check that finds nothing
-    /// says so on the bar for 3 s; a failed check says nothing either way.</summary>
+    /// if it's newer. A <paramref name="manual"/> check that finds nothing,
+    /// or fails, says so on the bar for 3 s; a failed automatic check says
+    /// nothing.</summary>
     private async Task CheckForUpdatesAsync(bool manual)
     {
         if (updateChecking || updateDownloading)
@@ -2799,6 +2800,8 @@ public partial class MainWindow : Window
             var (outcome, release) = await updates.CheckAsync();
             if (outcome == UpdateCheckOutcome.UpToDate && manual)
                 Status($"Up to date, {UpdateService.CurrentLabel}");
+            if (outcome == UpdateCheckOutcome.Unavailable && manual)
+                Status("Could not check for updates");
             if (outcome != UpdateCheckOutcome.Available || release is null)
                 return;
 
