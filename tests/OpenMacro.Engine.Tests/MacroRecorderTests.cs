@@ -33,6 +33,76 @@ public class MacroRecorderTests
     }
 
     [Fact]
+    public void HoldingAKeyRecordsOnePressAWaitAndTheRelease()
+    {
+        var time = new FakeTime();
+        var recorder = new MacroRecorder(time);
+
+        recorder.Start();
+        recorder.OnKeyDown(KeyCode.VcA);
+        for (var i = 0; i < 50; i++)
+        {
+            time.AdvanceMs(30);
+            recorder.OnKeyDown(KeyCode.VcA); // auto-repeat
+        }
+        time.AdvanceMs(30);
+        recorder.OnKeyUp(KeyCode.VcA);
+
+        var macro = recorder.Stop("test");
+
+        Assert.Equal(
+            [new KeyDownEvent(KeyCode.VcA), new DelayEvent(1530), new KeyUpEvent(KeyCode.VcA)],
+            macro.Events
+        );
+    }
+
+    [Fact]
+    public void AKeyPressedAgainAfterReleaseIsANewStep()
+    {
+        var time = new FakeTime();
+        var recorder = new MacroRecorder(time);
+
+        recorder.Start();
+        recorder.OnKeyDown(KeyCode.VcA);
+        time.AdvanceMs(40);
+        recorder.OnKeyUp(KeyCode.VcA);
+        time.AdvanceMs(60);
+        recorder.OnKeyDown(KeyCode.VcA);
+        time.AdvanceMs(40);
+        recorder.OnKeyUp(KeyCode.VcA);
+
+        var macro = recorder.Stop("test");
+
+        Assert.Equal(
+            [
+                new KeyDownEvent(KeyCode.VcA),
+                new DelayEvent(40),
+                new KeyUpEvent(KeyCode.VcA),
+                new DelayEvent(60),
+                new KeyDownEvent(KeyCode.VcA),
+                new DelayEvent(40),
+                new KeyUpEvent(KeyCode.VcA),
+            ],
+            macro.Events
+        );
+    }
+
+    [Fact]
+    public void HeldKeysAreForgottenWhenANewRecordingStarts()
+    {
+        var recorder = new MacroRecorder(new FakeTime());
+
+        recorder.Start();
+        recorder.OnKeyDown(KeyCode.VcA);
+        recorder.Stop("first");
+
+        recorder.Start();
+        recorder.OnKeyDown(KeyCode.VcA);
+
+        Assert.Equal([new KeyDownEvent(KeyCode.VcA)], recorder.Stop("second").Events);
+    }
+
+    [Fact]
     public void RecordsScrollWithDirectionAndRealGapsAsDelays()
     {
         var time = new FakeTime();
