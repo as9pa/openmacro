@@ -399,9 +399,15 @@ public class MacroEngineTests
         Assert.Equal([$"down:{KeyCode.VcA}"], sink.Snapshot());
 
         // The second press asks it to stop; the tail runs and playback ends.
+        // Wait for the exact expected output rather than a fixed quiet window:
+        // TriggerUp only completes a TCS created with RunContinuationsAsynchronously,
+        // so the tail step (KeyUp) resumes on a thread-pool thread on its own
+        // schedule. A quiescence heuristic (no new output for ~N ms) can read
+        // "stopped" before that resumption has actually appended "up:A" when the
+        // thread pool is under load, e.g. on a busy CI runner.
         engine.TriggerDown(KeyCode.VcCapsLock);
         engine.TriggerUp(KeyCode.VcCapsLock);
-        await WaitUntilAsync(() => Stopped(sink));
+        await WaitUntilAsync(() => sink.Snapshot().Length >= 2);
         Assert.Equal([$"down:{KeyCode.VcA}", $"up:{KeyCode.VcA}"], sink.Snapshot());
     }
 
