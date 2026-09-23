@@ -49,6 +49,28 @@ public sealed class MacroEngine : IAsyncDisposable
     public bool HasMouseTriggers => mouseBindings.Count > 0;
 
     /// <summary>
+    /// True if any binding's playback task is still running or parked at an
+    /// infinite wait / WaitForRelease step. Test seam: lets a test wait for
+    /// "no playback is active" instead of inferring it from sink quiescence.
+    /// </summary>
+    internal bool IsAnyPlaybackRunning
+    {
+        get
+        {
+            foreach (var state in bindings.Values.Concat(mouseBindings.Values))
+            {
+                lock (state)
+                {
+                    if (state.IsRunning)
+                        return true;
+                }
+            }
+
+            return false;
+        }
+    }
+
+    /// <summary>
     /// Called on the hook thread for every real (non-simulated) key-down.
     /// Must stay fast. Returns true if the key is an armed trigger — the
     /// caller should suppress it.
