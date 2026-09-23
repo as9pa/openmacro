@@ -134,7 +134,12 @@ public partial class MainWindow : Window
                 CancelUndoOffer();
                 RefreshBindingsList(sources.Length > 0 ? sources[0] : -1);
                 RefreshDetail();
-            }
+            },
+            // A filtered view hides rows, so a drop slot has no place in the
+            // full order: reordering waits for All. That also keeps row index
+            // and bindings index the same thing in commit and cancel above.
+            refuses: () => appFilterView is not null,
+            refused: () => Status("Show all macros to reorder")
         );
 
         // Recording skips clicks on our own window (they operate the
@@ -187,7 +192,48 @@ public partial class MainWindow : Window
         );
     }
 
-    private int Selected => BindingsList.SelectedIndex;
+    /// <summary>The selected binding, as an index into <see cref="bindings"/>.
+    /// Kept apart from the list's own selection so a macro the app filter
+    /// hides stays in the detail pane.</summary>
+    private int Selected => selectedBinding;
+
+    private int selectedBinding = -1;
+
+    /// <summary>Sidebar row to index into <see cref="bindings"/>. The app
+    /// filter hides rows, so a row's ListBox index is not its binding's
+    /// index; every row index goes through here.</summary>
+    private readonly List<int> rowBindings = [];
+
+    /// <summary>The sidebar's app filter, by process name; null is All. A
+    /// view only: never saved, so the app opens on All.</summary>
+    private string? appFilterView;
+
+    private int BindingAtRow(int row) =>
+        row >= 0 && row < rowBindings.Count ? rowBindings[row] : -1;
+
+    private int RowOf(int binding) => rowBindings.IndexOf(binding); // -1 when hidden or none
+
+    /// <summary>Selects a binding by its <see cref="bindings"/> index (-1 for
+    /// none), whether or not the filter shows its row.</summary>
+    private void SelectBinding(int i)
+    {
+        var changed = selectedBinding != i;
+        selectedBinding = i;
+        var row = RowOf(i);
+        if (BindingsList.SelectedIndex != row)
+        {
+            BindingsList.SelectedIndex = row; // SelectionChanged refreshes the detail
+            return;
+        }
+
+        // Same row as before (both -1 when the filter hides the binding), so
+        // no SelectionChanged: refresh here if the binding itself changed.
+        if (changed)
+        {
+            RefreshDetail();
+            RefreshBaseStatus();
+        }
+    }
 
     // ---- arming ----
 
@@ -570,6 +616,15 @@ public partial class MainWindow : Window
         // drop commits the model.
         if (!refreshing && bindingsReorder is not { IsReordering: true })
         {
+            // A row selected is its binding. No row selected is no binding,
+            // unless the selected binding is one the filter hides: then the
+            // list never had its row to lose.
+            var row = BindingsList.SelectedIndex;
+            if (row >= 0)
+                selectedBinding = BindingAtRow(row);
+            else if (RowOf(selectedBinding) >= 0)
+                selectedBinding = -1;
+
             RefreshDetail();
             RefreshBaseStatus(); // a new selection clears a stale conflict
         }
@@ -627,7 +682,7 @@ public partial class MainWindow : Window
         // A click on empty space (below the rows) deselects everything and
         // returns to the opening page.
         if (Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList)) < 0)
-            BindingsList.SelectedIndex = -1;
+            SelectBinding(-1);
     }
 
     private void ModeBox_SelectionChanged(object sender, SelectionChangedEventArgs e)
@@ -801,14 +856,14 @@ public partial class MainWindow : Window
 
     private void BindingsList_RightClick(object sender, MouseButtonEventArgs e)
     {
-        var i = Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
+        var i = BindingAtRow(Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList)));
         if (i < 0)
         {
             BindingsList.ContextMenu = null;
             return;
         }
 
-        BindingsList.SelectedIndex = i;
+        SelectBinding(i);
         BindingsList.ContextMenu = BuildBindingMenu(i);
     }
 
@@ -1154,7 +1209,13 @@ public partial class MainWindow : Window
 
     private void BindingsList_KeyDown(object sender, KeyEventArgs e)
     {
-        if (e.Key == Key.Delete && Selected >= 0 && Keyboard.FocusedElement is not TextBox)
+        // Only a selection the list shows: one the app filter hides is in the
+        // detail pane, not under the user's eye in the list.
+        if (
+            e.Key == Key.Delete
+            && RowOf(Selected) >= 0
+            && Keyboard.FocusedElement is not TextBox
+        )
         {
             DeleteSelectedBinding();
             e.Handled = true;
@@ -1168,7 +1229,7 @@ public partial class MainWindow : Window
         if (Rows.IsWithin<ButtonBase>(e.OriginalSource))
             return;
 
-        var i = Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList));
+        var i = BindingAtRow(Rows.IndexUnderMouse(BindingsList, e.GetPosition(BindingsList)));
         if (i < 0)
             return;
 
@@ -1242,7 +1303,7 @@ public partial class MainWindow : Window
         var deleted = bindings[i];
         bindings.RemoveAt(i);
         SaveAndRearm();
-        RefreshBindingsList(Math.Min(i, bindings.Count - 1));
+        RefreshBindingsList(NearestShownBinding(i));
         RefreshDetail();
         OfferUndo(new Deletion(i, deleted, null, null), $"Deleted “{deleted.Macro.Name}”");
     }
@@ -2236,10 +2297,16 @@ public partial class MainWindow : Window
     {
         refreshing = true;
         BindingsList.Items.Clear();
+        rowBindings.Clear();
+        RefreshAppFilterRow(); // first: it drops a filter whose last macro is gone
 
         for (var i = 0; i < bindings.Count; i++)
         {
             var b = bindings[i];
+            if (!ShownByAppFilter(b))
+                continue;
+
+            rowBindings.Add(i);
 
             var check = new CheckBox
             {
@@ -2330,7 +2397,10 @@ public partial class MainWindow : Window
             BindingsList.Items.Add(new ListBoxItem { Content = row, MinHeight = 48 });
         }
 
-        BindingsList.SelectedIndex = select;
+        selectedBinding = select;
+        BindingsList.SelectedIndex = RowOf(select); // -1 when the filter hides it
+        FilterCount.Text =
+            appFilterView is null ? "" : $"  {rowBindings.Count} of {bindings.Count}";
 
         // The header's chip wears whatever the selected row's chip wears, a
         // refusal mark included, and loses it on the same rebuild the row
@@ -2343,6 +2413,138 @@ public partial class MainWindow : Window
         refreshing = false;
         UpdateEmptyStates(); // how many macros there are decides the detail area
         RefreshKeyboard();
+    }
+
+    /// <summary>Where the selection goes after a delete at <paramref name="at"/>:
+    /// the next macro the list will show, else the previous one, else none.
+    /// A filter whose last macro just went falls back to All on the refresh,
+    /// so then every macro counts as shown.</summary>
+    private int NearestShownBinding(int at)
+    {
+        var filterStays = appFilterView is null || bindings.Exists(ShownByAppFilter);
+        bool Shown(int j) => !filterStays || ShownByAppFilter(bindings[j]);
+
+        for (var j = at; j < bindings.Count; j++)
+            if (Shown(j))
+                return j;
+        for (var j = Math.Min(at, bindings.Count) - 1; j >= 0; j--)
+            if (Shown(j))
+                return j;
+        return -1;
+    }
+
+    private bool ShownByAppFilter(Binding b) =>
+        appFilterView is null
+        || string.Equals(b.AppFilter, appFilterView, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Rebuilds the chips under the "Macros" eyebrow: "All", then one
+    /// per app a macro is filtered to, in the order the sidebar first meets
+    /// them. Collapsed while no macro has an app filter. A pressed chip whose
+    /// last macro is gone falls back to All.</summary>
+    private void RefreshAppFilterRow()
+    {
+        var apps = new List<(string App, int Count)>();
+        foreach (var b in bindings)
+        {
+            if (b.AppFilter is not { } app)
+                continue;
+
+            var at = apps.FindIndex(a =>
+                string.Equals(a.App, app, StringComparison.OrdinalIgnoreCase)
+            );
+            if (at < 0)
+                apps.Add((app, 1));
+            else
+                apps[at] = (apps[at].App, apps[at].Count + 1);
+        }
+
+        if (
+            appFilterView is not null
+            && !apps.Exists(a =>
+                string.Equals(a.App, appFilterView, StringComparison.OrdinalIgnoreCase)
+            )
+        )
+            appFilterView = null;
+
+        AppFilterRow.Children.Clear();
+        AppFilterRow.Visibility = apps.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+        if (apps.Count == 0)
+            return;
+
+        var all = FilterChip(new TextBlock { Text = "All" }, null);
+        all.Padding = new Thickness(8, 0, 8, 0);
+        AppFilterRow.Children.Add(all);
+
+        foreach (var (app, count) in apps)
+        {
+            var pressed = string.Equals(app, appFilterView, StringComparison.OrdinalIgnoreCase);
+
+            // GetAppIcon falls back to the on-disk cache when the app isn't
+            // running; with neither, the chip wears the name's first letter.
+            FrameworkElement face = GetAppIcon(app) is { } icon
+                ? new Image
+                {
+                    Source = icon,
+                    Width = 16,
+                    Height = 16,
+                }
+                : AppMonogram(app, pressed);
+
+            var chip = FilterChip(face, app);
+            chip.Width = 22;
+            chip.ToolTip = $"{app} · {count} {(count == 1 ? "macro" : "macros")}";
+            AppFilterRow.Children.Add(chip);
+        }
+    }
+
+    /// <summary>One filter chip; <paramref name="app"/> null is "All".</summary>
+    private ToggleButton FilterChip(object content, string? app)
+    {
+        var chip = new ToggleButton
+        {
+            Content = content,
+            Style = (Style)FindResource("FilterChip"),
+            IsChecked = app is null
+                ? appFilterView is null
+                : string.Equals(app, appFilterView, StringComparison.OrdinalIgnoreCase),
+        };
+        AutomationProperties.SetAutomationId(chip, "AppFilterChip");
+        AutomationProperties.SetName(chip, app ?? "All");
+        chip.Click += (_, _) => ShowAppFilter(app);
+        return chip;
+    }
+
+    /// <summary>The stand-in for an app with no icon: its first letter on a
+    /// small rounded square, one step brighter on the pressed chip.</summary>
+    private static Border AppMonogram(string app, bool pressed)
+    {
+        var letter = new TextBlock
+        {
+            Text = app.Length > 0 ? app[..1].ToUpperInvariant() : "?",
+            FontSize = 10,
+            FontWeight = FontWeights.SemiBold,
+            HorizontalAlignment = HorizontalAlignment.Center,
+            VerticalAlignment = VerticalAlignment.Center,
+        };
+        letter.SetResourceReference(TextBlock.ForegroundProperty, pressed ? "Text" : "Subtext");
+
+        var square = new Border
+        {
+            Width = 16,
+            Height = 16,
+            CornerRadius = new CornerRadius(4),
+            Child = letter,
+        };
+        square.SetResourceReference(Border.BackgroundProperty, pressed ? "Surface3" : "Surface2");
+        return square;
+    }
+
+    /// <summary>A chip press: the list shows that app's macros (null: all of
+    /// them). The selection stays put even when its row goes out of view.</summary>
+    private void ShowAppFilter(string? app)
+    {
+        appFilterView = app;
+        RefreshBindingsList(Selected);
     }
 
     /// <summary>The right edge of a sidebar row: the keybind as a key chip —
@@ -2394,7 +2596,7 @@ public partial class MainWindow : Window
         if (sender is not Button { Tag: int i })
             return;
 
-        BindingsList.SelectedIndex = i;
+        SelectBinding(i);
         BeginTriggerCapture();
     }
 
@@ -2449,7 +2651,7 @@ public partial class MainWindow : Window
         // binding's trigger.
         if (boundIndex >= 0)
         {
-            BindingsList.SelectedIndex = boundIndex;
+            SelectBinding(boundIndex);
             Status($"{KeyName(key)} → {bindings[boundIndex].Macro.Name}");
             return;
         }

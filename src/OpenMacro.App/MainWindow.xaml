@@ -82,9 +82,15 @@
                     <DockPanel DockPanel.Dock="Top" Margin="14,10,10,6">
                         <Button DockPanel.Dock="Right" Content="+" Padding="8,0" FontSize="15"
                                 ToolTip="New macro" Click="AddMacro_Click"/>
-                        <TextBlock Text="Macros" Style="{StaticResource Eyebrow}"
-                                   VerticalAlignment="Center"/>
+                        <!-- The count reads "9 of 13" while an app filter is on. -->
+                        <TextBlock Style="{StaticResource Eyebrow}" VerticalAlignment="Center"
+                            ><Run Text="Macros"/><Run x:Name="FilterCount" FontWeight="Normal"/></TextBlock>
                     </DockPanel>
+                    <!-- App filter: "All", then one chip per app a macro is
+                         filtered to (built in code). Collapsed while no macro
+                         has an app filter. 22 px chips + 6 px under = 28 px. -->
+                    <StackPanel x:Name="AppFilterRow" DockPanel.Dock="Top" Orientation="Horizontal"
+                                Margin="14,0,10,6" Visibility="Collapsed"/>
                     <ListBox x:Name="BindingsList"
                              SelectionChanged="BindingsList_SelectionChanged"
                              PreviewMouseLeftButtonDown="BindingsList_MouseDown"

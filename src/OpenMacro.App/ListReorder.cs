@@ -40,6 +40,8 @@ internal sealed class ListReorder
     private readonly Func<object, bool> blocksDrag;
     private readonly Action<int[], int> commit;
     private readonly Action<int[]> cancel;
+    private readonly Func<bool>? refuses;
+    private readonly Action? refused;
 
     private Point dragStart;
     private int dragSourceIndex = -1;
@@ -62,17 +64,25 @@ internal sealed class ListReorder
 
     /// <param name="blocksDrag">Given the press's OriginalSource, true when
     /// a drag must not start there (e.g. an inline editor or a checkbox).</param>
+    /// <param name="refuses">True while reordering is off altogether (e.g. the
+    /// list shows a filtered view); checked when a drag crosses the threshold.</param>
+    /// <param name="refused">Told once per drag that <paramref name="refuses"/>
+    /// turned away, so the owner can say why nothing moved.</param>
     public ListReorder(
         ListBox list,
         Func<object, bool> blocksDrag,
         Action<int[], int> commit,
-        Action<int[]> cancel
+        Action<int[]> cancel,
+        Func<bool>? refuses = null,
+        Action? refused = null
     )
     {
         this.list = list;
         this.blocksDrag = blocksDrag;
         this.commit = commit;
         this.cancel = cancel;
+        this.refuses = refuses;
+        this.refused = refused;
 
         list.PreviewMouseLeftButtonDown += OnMouseDown;
         list.PreviewMouseMove += OnMouseMove;
@@ -137,6 +147,15 @@ internal sealed class ListReorder
             && Math.Abs(position2.Y - dragStart.Y) < SystemParameters.MinimumVerticalDragDistance
         )
             return;
+
+        // Threshold crossed while reordering is off: this press is spent,
+        // said once, and the rows stay put.
+        if (refuses?.Invoke() == true)
+        {
+            dragSourceIndex = -1;
+            refused?.Invoke();
+            return;
+        }
 
         // Threshold crossed: enter live-reorder mode.
         isDragging = true;

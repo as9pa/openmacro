@@ -144,6 +144,45 @@
         </Setter>
     </Style>
 
+    <!-- A sidebar app filter chip ("All" or an app's icon). Checked is the
+         pressed chip; the row is rebuilt on every press, so the toggle's own
+         flip never outlives the click. -->
+    <Style x:Key="FilterChip" TargetType="ToggleButton">
+        <Setter Property="Height" Value="22"/>
+        <Setter Property="MinWidth" Value="22"/>
+        <Setter Property="Padding" Value="0"/>
+        <Setter Property="Margin" Value="0,0,4,0"/>
+        <Setter Property="Background" Value="Transparent"/>
+        <Setter Property="BorderBrush" Value="Transparent"/>
+        <Setter Property="Foreground" Value="{DynamicResource Subtext}"/>
+        <Setter Property="FontSize" Value="11.5"/>
+        <Setter Property="FontWeight" Value="SemiBold"/>
+        <Setter Property="FocusVisualStyle" Value="{StaticResource FocusVisual}"/>
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Chrome" CornerRadius="5" BorderThickness="1"
+                            Padding="{TemplateBinding Padding}"
+                            Background="{TemplateBinding Background}"
+                            BorderBrush="{TemplateBinding BorderBrush}">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center"/>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Press}"/>
+                        </Trigger>
+                        <!-- After the hover trigger, so a pressed chip keeps its fill. -->
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Chrome" Property="Background" Value="{DynamicResource Surface1}"/>
+                            <Setter TargetName="Chrome" Property="BorderBrush" Value="{DynamicResource Hairline}"/>
+                            <Setter Property="Foreground" Value="{DynamicResource Text}"/>
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
     <!-- The detail header's overflow: three dots and nothing else. The ink
          lifting from Subtext to Text is the whole hover affordance; the
          padding is a forgiving hit target on a negative margin, so it costs
