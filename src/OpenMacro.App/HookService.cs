@@ -49,6 +49,18 @@ public sealed class HookService : IAsyncDisposable
     public bool IsRecording => recorder.IsRecording;
 
     /// <summary>
+    /// Every event the recorder appends (delays included), in the order
+    /// StopRecording returns them. Raised on the hook thread: marshal to the
+    /// UI before touching controls.
+    /// </summary>
+    public event Action<MacroEvent>? StepRecorded;
+
+    /// <summary>Time since the last recorded event (any thread).</summary>
+    public TimeSpan SinceLastRecordedEvent => recorder.SinceLastEvent;
+
+    public HookService() => recorder.StepRecorded += e => StepRecorded?.Invoke(e);
+
+    /// <summary>
     /// Screen-pixel test for "is this point on our own window", set by the
     /// UI. Clicks there while recording are operating the recorder (e.g.
     /// pressing Stop), not part of the macro, so they are not captured.
