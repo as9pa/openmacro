@@ -5,7 +5,12 @@ namespace OpenMacro.App;
 
 // Key/modifier names are System.Windows.Input enum names ("F6",
 // "Control, Shift") so the file stays hand-editable, like bindings.json.
-public sealed record AppSettings(string? ArmHotkeyKey = null, string? ArmHotkeyModifiers = null);
+// CheckForUpdates gates the launch and six-hourly GitHub release checks.
+public sealed record AppSettings(
+    string? ArmHotkeyKey = null,
+    string? ArmHotkeyModifiers = null,
+    bool CheckForUpdates = true
+);
 
 /// <summary>
 /// App-level settings (not macros — those are ConfigStore's per-macro files).

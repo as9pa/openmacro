@@ -1,0 +1,75 @@
+name: release
+
+# Push a tag like v0.3.0 (annotated; its message becomes the release notes).
+# The tag must match <Version> in src/OpenMacro.App/OpenMacro.App.csproj.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      TAG: ${{ github.ref_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check the tag matches the csproj version
+        run: |
+          [xml]$proj = Get-Content src/OpenMacro.App/OpenMacro.App.csproj
+          $version = @($proj.Project.PropertyGroup | ForEach-Object { $_.Version } | Where-Object { $_ })[0]
+          if ("v$version" -ne $env:TAG) {
+            Write-Error "Tag $env:TAG does not match csproj <Version>$version</Version>."
+            exit 1
+          }
+          "VERSION=$version" >> $env:GITHUB_ENV
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - run: dotnet build OpenMacro.slnx -c Release
+      - run: dotnet test --no-build -c Release
+
+      - name: Publish
+        run: |
+          dotnet publish src/OpenMacro.App -c Release -p:PublishProfile=SingleFile -o out/single-file
+          dotnet publish src/OpenMacro.App -c Release -p:PublishProfile=FrameworkDependent -o out/framework-dependent
+
+      - name: Package assets and SHA256SUMS
+        run: |
+          New-Item -ItemType Directory dist | Out-Null
+          Copy-Item out/single-file/openmacro.exe "dist/openmacro-v$env:VERSION-win-x64.exe"
+          Get-ChildItem out/framework-dependent -Exclude *.pdb |
+            Compress-Archive -DestinationPath "dist/openmacro-v$env:VERSION-win-x64-dotnet.zip"
+
+          # sha256sum format: "<hex>  <filename>", LF line endings. The app
+          # checks its download against this file.
+          $lines = Get-ChildItem dist -File | Sort-Object Name | ForEach-Object {
+            '{0}  {1}' -f (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant(), $_.Name
+          }
+          [IO.File]::WriteAllText("$PWD/dist/SHA256SUMS", ($lines -join "`n") + "`n")
+          Get-Content dist/SHA256SUMS
+
+      - name: Release notes from the tag message
+        run: |
+          # checkout can leave the tag lightweight; fetch the real tag object.
+          git fetch --force origin "refs/tags/${env:TAG}:refs/tags/${env:TAG}"
+          git tag -l --format='%(contents)' $env:TAG | Out-File -Encoding utf8 notes.md
+
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create $env:TAG `
+            "dist/openmacro-v$env:VERSION-win-x64.exe" `
+            "dist/openmacro-v$env:VERSION-win-x64-dotnet.zip" `
+            dist/SHA256SUMS `
+            --title $env:TAG --notes-file notes.md

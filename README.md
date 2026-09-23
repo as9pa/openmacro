@@ -49,8 +49,9 @@ needs the .NET 10 SDK.
     dotnet test
     dotnet run --project src\OpenMacro.App
 
-release builds are made with `dotnet publish src\OpenMacro.App -c Release -r win-x64 -p:PublishSingleFile=true`,
-with `--self-contained true` for the `.exe` and `--self-contained false` for the `-dotnet.zip`.
+release builds are made by `.github/workflows/release.yml` when a `v*` tag is pushed (the tag must match `<Version>` in the csproj).
+locally: `dotnet publish src\OpenMacro.App -c Release -p:PublishProfile=SingleFile` for the `.exe`
+and `-p:PublishProfile=FrameworkDependent` for the `-dotnet.zip`. each release also carries a `SHA256SUMS`.
 
 ## License
 

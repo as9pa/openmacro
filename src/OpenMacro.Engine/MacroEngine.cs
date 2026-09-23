@@ -48,6 +48,23 @@ public sealed class MacroEngine : IAsyncDisposable
     /// hook layer needs the mouse hook up to watch for them.</summary>
     public bool HasMouseTriggers => mouseBindings.Count > 0;
 
+    /// <summary>True while any armed binding is mid-playback.</summary>
+    public bool IsPlaying
+    {
+        get
+        {
+            foreach (var state in bindings.Values.Concat(mouseBindings.Values))
+            {
+                lock (state)
+                {
+                    if (state.IsRunning)
+                        return true;
+                }
+            }
+            return false;
+        }
+    }
+
     /// <summary>
     /// True if any binding's playback task is still running or parked at an
     /// infinite wait / WaitForRelease step. Test seam: lets a test wait for

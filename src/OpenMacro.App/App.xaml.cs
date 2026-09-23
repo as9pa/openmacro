@@ -12,13 +12,14 @@ public partial class App : Application
     protected override void OnStartup(StartupEventArgs e)
     {
         instanceMutex = new Mutex(initiallyOwned: true, @"Local\openmacro-app", out var createdNew);
-        if (!createdNew)
+        if (!createdNew && !(e.Args.Contains(UpdateService.RestartArg) && WaitForOldInstance()))
         {
             MessageBox.Show("openmacro is already running.", "openmacro");
             Shutdown();
             return;
         }
 
+        UpdateService.DeleteLeftoverOldExe();
         ThemeManager.Apply(Theme.Default);
         base.OnStartup(e);
 
@@ -26,6 +27,20 @@ public partial class App : Application
         // replacement that every DynamicResource consumer has to pick up, and
         // doing it here proves that end to end.
         Dispatcher.BeginInvoke(DispatcherPriority.Loaded, new Action(ApplyWindowsAccent));
+    }
+
+    /// <summary>Started by "Restart to update": the old instance is still
+    /// shutting down and holds the mutex, so wait for it to let go.</summary>
+    private static bool WaitForOldInstance()
+    {
+        try
+        {
+            return instanceMutex!.WaitOne(TimeSpan.FromSeconds(15));
+        }
+        catch (AbandonedMutexException)
+        {
+            return true; // it exited without releasing: ours now all the same
+        }
     }
 
     /// <summary>
