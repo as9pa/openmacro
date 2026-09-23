@@ -8,7 +8,7 @@ namespace OpenMacro.App;
 public sealed record AppSettings(string? ArmHotkeyKey = null, string? ArmHotkeyModifiers = null);
 
 /// <summary>
-/// App-level settings (not macros — those are ConfigStore's bindings.json).
+/// App-level settings (not macros — those are ConfigStore's per-macro files).
 /// A separate file so the bindings schema stays a plain array.
 /// </summary>
 public static class SettingsStore

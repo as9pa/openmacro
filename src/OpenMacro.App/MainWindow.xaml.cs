@@ -25,6 +25,13 @@ public partial class MainWindow : Window
 {
     private readonly HookService hooks = new();
     private readonly List<Binding> bindings;
+
+    private readonly ConfigStore store = new();
+
+    // What each macro's file and order.json hold as of the last write, so
+    // Persist rewrites only what an edit changed.
+    private readonly Dictionary<string, Binding> persisted = [];
+    private List<string> persistedOrder = [];
     private readonly Dictionary<KeyCode, Button> keyButtons = [];
 
     private TaskbarIcon? tray;
@@ -54,7 +61,11 @@ public partial class MainWindow : Window
     public MainWindow()
     {
         InitializeComponent();
-        bindings = ConfigStore.Load()?.ToList() ?? [];
+        var loaded = store.LoadAll();
+        bindings = [.. loaded.Bindings];
+        foreach (var binding in bindings)
+            persisted[binding.Id] = binding;
+        persistedOrder = [.. bindings.Select(b => b.Id)];
         BuildKeyboard();
         SetupTray();
 
@@ -153,6 +164,17 @@ public partial class MainWindow : Window
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
         RefreshBaseStatus(); // the bar opens on the base line, never blank
+
+        // A skipped file stays up until something else takes the bar; the
+        // one-time move to per-macro files is only news for a moment.
+        if (loaded.Errors.Count > 0)
+            Status(string.Join(" · ", loaded.Errors), sticky: true);
+        else if (loaded.Migrated > 0)
+            Status(
+                loaded.Migrated == 1
+                    ? "Moved 1 macro to its own file"
+                    : $"Moved {loaded.Migrated} macros to their own files"
+            );
     }
 
     private sealed record ScreenRect(double Left, double Top, double Right, double Bottom);
@@ -254,9 +276,47 @@ public partial class MainWindow : Window
         RefreshBaseStatus(); // the base line counts what just went live
     }
 
+    /// <summary>Writes what changed since the last write: the file of each
+    /// binding that is a new record (every edit is a <c>with</c>, so
+    /// reference inequality is exactly "edited"), and order.json if the
+    /// sidebar order moved. A removed macro's file stays until its Undo offer
+    /// is over (see <see cref="FlushDeletes"/>).</summary>
+    private void Persist()
+    {
+        foreach (var binding in bindings)
+        {
+            if (persisted.TryGetValue(binding.Id, out var was) && ReferenceEquals(was, binding))
+                continue;
+            store.SaveBinding(binding);
+            persisted[binding.Id] = binding;
+        }
+
+        var order = bindings.Select(b => b.Id).ToList();
+        if (!order.SequenceEqual(persistedOrder))
+        {
+            store.SaveOrder(bindings);
+            persistedOrder = order;
+        }
+    }
+
+    /// <summary>Deletes the files of removed macros, except the one a live
+    /// Undo offer can still put back.</summary>
+    private void FlushDeletes()
+    {
+        var keep = bindings.Select(b => b.Id).ToHashSet();
+        if (pendingUndo is { Steps: null } undo)
+            keep.Add(undo.Binding.Id);
+
+        foreach (var (id, binding) in persisted.Where(p => !keep.Contains(p.Key)).ToList())
+        {
+            store.DeleteBinding(binding);
+            persisted.Remove(id);
+        }
+    }
+
     private void SaveAndRearm()
     {
-        ConfigStore.Save(bindings);
+        Persist();
 
         // Re-arming recomputes the base itself once the hook is live, or lands
         // the "no macros enabled" refusal; either way it owns the bar from here.
@@ -286,7 +346,7 @@ public partial class MainWindow : Window
                 Enabled: false
             )
         );
-        ConfigStore.Save(bindings);
+        Persist();
         RefreshBindingsList(bindings.Count - 1);
         RefreshDetail();
         StartNameEdit();
@@ -782,11 +842,7 @@ public partial class MainWindow : Window
         menu.Items.Add(
             MenuItemFor(
                 "Open config file location",
-                () =>
-                    System.Diagnostics.Process.Start(
-                        "explorer.exe",
-                        $"/select,\"{ConfigStore.DefaultPath}\""
-                    )
+                OpenConfigLocation
             )
         );
         menu.Items.Add(new Separator());
@@ -1168,12 +1224,13 @@ public partial class MainWindow : Window
         // unchecked — only one holder of a key may be enabled at a time.
         var copy = bindings[i] with
         {
+            Id = Binding.NewId(),
             Enabled = false,
             Macro = bindings[i].Macro with { Name = $"{bindings[i].Macro.Name} (copy)" },
         };
 
         bindings.Insert(i + 1, copy);
-        ConfigStore.Save(bindings);
+        Persist();
         RefreshBindingsList(i + 1);
         RefreshDetail();
         Status("duplicated");
@@ -1191,6 +1248,21 @@ public partial class MainWindow : Window
         RefreshBindingsList(Math.Min(i, bindings.Count - 1));
         RefreshDetail();
         OfferUndo(new Deletion(i, deleted, null, null), $"Deleted “{deleted.Macro.Name}”");
+    }
+
+    /// <summary>Shows the selected macro's file in Explorer, or the macros
+    /// folder when nothing is selected.</summary>
+    private void OpenConfigLocation()
+    {
+        var file = Selected >= 0 ? store.PathFor(bindings[Selected]) : null;
+        if (file is not null && System.IO.File.Exists(file))
+        {
+            System.Diagnostics.Process.Start("explorer.exe", $"/select,\"{file}\"");
+            return;
+        }
+
+        System.IO.Directory.CreateDirectory(store.MacrosDirectory);
+        System.Diagnostics.Process.Start("explorer.exe", $"\"{store.MacrosDirectory}\"");
     }
 
     private static MenuItem MenuItemFor(string header, Action action, string? toolTip = null)
@@ -1253,6 +1325,7 @@ public partial class MainWindow : Window
         StatusText.Inlines.Add(undo);
 
         pendingUndo = deletion;
+        FlushDeletes(); // an offer this one replaces is over: its macro goes now
         undoStatusToken = statusToken;
         undoExpiry.Stop(); // restart the 8 s clock for this delete
         undoExpiry.Start();
@@ -1276,6 +1349,7 @@ public partial class MainWindow : Window
 
         var showing = statusToken == undoStatusToken;
         DropUndo();
+        FlushDeletes(); // the macro can't come back now, so its file goes
         if (showing)
             FadeToBaseStatus();
     }
@@ -3004,6 +3078,11 @@ public partial class MainWindow : Window
         trayOffIcon.Dispose(); // the tray is gone, so the handles can go too
         trayOnIcon.Dispose();
         hooks.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
+
+        // Closing ends any Undo offer: a macro deleted in its last 8 s is
+        // gone for good, file included.
+        DropUndo();
+        FlushDeletes();
         base.OnClosing(e);
     }
 }

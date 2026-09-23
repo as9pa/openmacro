@@ -20,7 +20,13 @@ Binding[] defaults =
     ),
 ];
 
-var bindings = new List<Binding>(ConfigStore.Load() ?? defaults);
+var store = new ConfigStore();
+var loaded = store.LoadAll();
+foreach (var error in loaded.Errors)
+    Console.WriteLine($"  skipped: {error}");
+if (loaded.Migrated > 0)
+    Console.WriteLine($"  moved {loaded.Migrated} macros to their own files");
+var bindings = new List<Binding>(loaded.Found ? loaded.Bindings : defaults);
 
 var sink = new SharpHookInputSink(new EventSimulator());
 var engine = new MacroEngine(sink, bindings);
@@ -82,7 +88,7 @@ hook.KeyReleased += (_, e) =>
 
 Console.WriteLine("openmacro — phase 3: recorder");
 Console.WriteLine($"  F10 starts/stops recording; the recording binds to F11 (once) and is saved.");
-Console.WriteLine($"  config: {ConfigStore.DefaultPath}");
+Console.WriteLine($"  config: {store.MacrosDirectory}");
 Console.WriteLine("  bindings:");
 foreach (var b in bindings)
     Console.WriteLine($"    {b.Trigger,-14} {b.Mode,-10} {b.Macro.Name}");
@@ -118,7 +124,7 @@ void ToggleRecording()
     {
         bindings.RemoveAll(b => b.Trigger == PlaybackKey);
         bindings.Add(new Binding(PlaybackKey, macro, PlaybackMode.Once));
-        ConfigStore.Save(bindings);
+        store.SaveAll(bindings);
 
         var old = engine;
         engine = new MacroEngine(sink, bindings);
