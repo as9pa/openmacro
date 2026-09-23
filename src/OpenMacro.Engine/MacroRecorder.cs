@@ -11,6 +11,7 @@ public sealed class MacroRecorder(TimeProvider? time = null)
 {
     private readonly TimeProvider time = time ?? TimeProvider.System;
     private readonly List<MacroEvent> events = [];
+    private readonly HashSet<KeyCode> heldKeys = [];
     private long lastTimestamp;
 
     public bool IsRecording { get; private set; }
@@ -31,6 +32,7 @@ public sealed class MacroRecorder(TimeProvider? time = null)
     public void Start()
     {
         events.Clear();
+        heldKeys.Clear();
         lastTimestamp = 0;
         IsRecording = true;
     }
@@ -42,9 +44,22 @@ public sealed class MacroRecorder(TimeProvider? time = null)
         return new Macro(name, events.ToArray());
     }
 
-    public void OnKeyDown(KeyCode key) => Add(new KeyDownEvent(key));
+    // Holding a key makes Windows repeat its KeyDown every few dozen
+    // milliseconds. Only the first press is a step: the hold then records
+    // as press, wait, release instead of fifty identical presses.
+    public void OnKeyDown(KeyCode key)
+    {
+        if (IsRecording && !heldKeys.Add(key))
+            return;
 
-    public void OnKeyUp(KeyCode key) => Add(new KeyUpEvent(key));
+        Add(new KeyDownEvent(key));
+    }
+
+    public void OnKeyUp(KeyCode key)
+    {
+        heldKeys.Remove(key);
+        Add(new KeyUpEvent(key));
+    }
 
     public void OnMouseDown(MouseButton button) => Add(new MouseDownEvent(button));
 
