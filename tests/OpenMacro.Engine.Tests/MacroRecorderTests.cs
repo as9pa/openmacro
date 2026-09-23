@@ -114,6 +114,77 @@ public class MacroRecorderTests
         Assert.Equal([new KeyDownEvent(KeyCode.VcB)], second.Events);
     }
 
+    [Fact]
+    public void StepRecordedMatchesStopForMixedInput()
+    {
+        var time = new FakeTime();
+        var recorder = new MacroRecorder(time);
+        var raised = new List<MacroEvent>();
+        recorder.StepRecorded += raised.Add;
+
+        recorder.Start();
+        recorder.OnKeyDown(KeyCode.VcA);
+        time.AdvanceMs(40);
+        recorder.OnKeyUp(KeyCode.VcA);
+        time.AdvanceMs(300);
+        recorder.OnMouseDown(MouseButton.Button1);
+        recorder.OnMouseUp(MouseButton.Button1); // same instant: 1 ms delay
+        time.AdvanceMs(1200);
+        recorder.OnScroll(ScrollDirection.Down);
+        time.AdvanceMs(15);
+        recorder.OnScroll(ScrollDirection.Up);
+        time.AdvanceMs(900); // trailing gap: never recorded
+
+        var macro = recorder.Stop("test");
+
+        Assert.Equal(macro.Events, raised);
+        Assert.Equal(
+            [
+                new KeyDownEvent(KeyCode.VcA),
+                new DelayEvent(40),
+                new KeyUpEvent(KeyCode.VcA),
+                new DelayEvent(300),
+                new MouseDownEvent(MouseButton.Button1),
+                new DelayEvent(1),
+                new MouseUpEvent(MouseButton.Button1),
+                new DelayEvent(1200),
+                new ScrollEvent(ScrollDirection.Down),
+                new DelayEvent(15),
+                new ScrollEvent(ScrollDirection.Up),
+            ],
+            raised
+        );
+    }
+
+    [Fact]
+    public void StepRecordedIsNotRaisedWhenNotRecording()
+    {
+        var recorder = new MacroRecorder(new FakeTime());
+        var raised = new List<MacroEvent>();
+        recorder.StepRecorded += raised.Add;
+
+        recorder.OnKeyDown(KeyCode.VcA); // before Start
+        recorder.Start();
+        recorder.Stop("test");
+        recorder.OnKeyDown(KeyCode.VcB); // after Stop
+
+        Assert.Empty(raised);
+    }
+
+    [Fact]
+    public void SinceLastEventCountsFromTheLastRecordedEvent()
+    {
+        var time = new FakeTime();
+        var recorder = new MacroRecorder(time);
+
+        recorder.Start();
+        time.AdvanceMs(500);
+        recorder.OnKeyDown(KeyCode.VcA);
+        time.AdvanceMs(840);
+
+        Assert.Equal(TimeSpan.FromMilliseconds(840), recorder.SinceLastEvent);
+    }
+
     /// <summary>Manually advanced clock. Frequency: 10M ticks/second.</summary>
     private sealed class FakeTime : TimeProvider
     {

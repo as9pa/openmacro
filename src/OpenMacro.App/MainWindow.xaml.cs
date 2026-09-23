@@ -43,6 +43,21 @@ public partial class MainWindow : Window
     // Binding index the "Record steps" recording appends into; -1 when idle.
     private int recordTargetIndex = -1;
 
+    // What the recording has captured so far, delays included, in the order
+    // StopRecording will return it: the live rows on the end of the timeline.
+    // The session number drops step notifications that were already queued
+    // on the dispatcher when their recording stopped.
+    private readonly List<MacroEvent> liveSteps = [];
+    private int recordingSession;
+    private Action<MacroEvent>? liveStepHandler;
+
+    // The wait since the last recorded input, counting up in the pending row.
+    private readonly System.Windows.Threading.DispatcherTimer pendingWaitTimer = new()
+    {
+        Interval = TimeSpan.FromMilliseconds(33),
+    };
+    private TextBlock? pendingWaitText;
+
     // Live drag-to-reorder, one per list (see ListReorder for the visuals).
     private readonly ListReorder eventsReorder;
     private readonly ListReorder bindingsReorder;
@@ -149,6 +164,7 @@ public partial class MainWindow : Window
         // The Undo offer's 8 s are up: same ending as any other way it
         // stops being offered.
         undoExpiry.Tick += (_, _) => CancelUndoOffer();
+        pendingWaitTimer.Tick += (_, _) => TickPendingWait();
 
         RefreshBindingsList(bindings.Count > 0 ? 0 : -1);
         RefreshDetail();
@@ -1380,6 +1396,10 @@ public partial class MainWindow : Window
 
     private void EventsList_MouseDoubleClick(object sender, MouseButtonEventArgs e)
     {
+        // Read-only while recording into this macro: Stop commits first.
+        if (RecordingRowShowing)
+            return;
+
         var at = Rows.IndexUnderMouse(EventsList, e.GetPosition(EventsList));
         if (!IsStepRow(at))
             return;
@@ -1553,6 +1573,13 @@ public partial class MainWindow : Window
 
     private void EventsList_RightClick(object sender, MouseButtonEventArgs e)
     {
+        // Read-only while recording into this macro: no menu to edit with.
+        if (RecordingRowShowing)
+        {
+            EventsList.ContextMenu = null;
+            return;
+        }
+
         var at = Rows.IndexUnderMouse(EventsList, e.GetPosition(EventsList));
 
         // Empty space is for inserting; rows are for editing. The recording
@@ -1771,6 +1798,7 @@ public partial class MainWindow : Window
     {
         if (
             e.Key is Key.Delete or Key.Back
+            && !RecordingRowShowing
             && EventsList.SelectedItems.Count > 0
             && Keyboard.FocusedElement is not TextBox
         )
@@ -1892,7 +1920,17 @@ public partial class MainWindow : Window
 
             // Remember the target now: selection may change while recording.
             recordTargetIndex = Selected;
+            liveSteps.Clear();
+            var session = ++recordingSession;
+            liveStepHandler = step =>
+                Dispatcher.BeginInvoke(() =>
+                {
+                    if (session == recordingSession && recordTargetIndex >= 0)
+                        AppendLiveStep(step);
+                });
+            hooks.StepRecorded += liveStepHandler;
             hooks.StartRecording();
+            pendingWaitTimer.Start();
             // The click leaves keyboard focus on this button, and Space/Enter
             // activate a focused button — recording a Space would press Stop.
             Keyboard.ClearFocus();
@@ -1903,10 +1941,13 @@ public partial class MainWindow : Window
         }
 
         var recorded = hooks.StopRecording("steps");
+        StopLiveSteps();
         var target = recordTargetIndex;
         recordTargetIndex = -1;
         SyncRecordButtons(recording: false);
         RemoveRecordingRow(); // the recorded steps land where it stood
+        liveSteps.Clear();
+        UpdateTimelineSummary(); // back to the model's own steps
 
         if (recorded.Events.Count == 0)
         {
@@ -1922,6 +1963,11 @@ public partial class MainWindow : Window
     // back out never depends on where it sits.
     private const string RecordingRowTag = "recording";
 
+    // The rows a recording adds above the placeholder: the steps captured so
+    // far and the wait still running since the last of them.
+    private const string LiveStepRowTag = "live-step";
+    private const string PendingWaitRowTag = "pending-wait";
+
     /// <summary>True while the placeholder is in the list: the row indices at
     /// and past it mean nothing to the macro on show.</summary>
     private bool RecordingRowShowing => recordTargetIndex >= 0 && recordTargetIndex == Selected;
@@ -1935,8 +1981,88 @@ public partial class MainWindow : Window
     /// placeholder behind, and selecting this one again brings it back.</summary>
     private void ShowRecordingRow()
     {
+        pendingWaitText = null;
         if (!RecordingRowShowing)
             return;
+
+        // What has been recorded so far goes back first, numbered on from
+        // the macro's own steps, then the wait still running, then the cursor.
+        foreach (var step in liveSteps)
+            AddLiveStepRow(step);
+        AddPendingAndRecordingRows();
+        UpdateTimelineSummary();
+        UpdateEmptyStates(); // a row is a row: "No steps yet" stands down
+    }
+
+    /// <summary>One step the recorder has just appended, on the dispatcher:
+    /// a real step row goes in above the pending wait and the placeholder,
+    /// which follow it down. Only the list of the macro being recorded into
+    /// shows it; the others pick it up from <see cref="liveSteps"/> when
+    /// <see cref="ShowRecordingRow"/> runs.</summary>
+    private void AppendLiveStep(MacroEvent step)
+    {
+        liveSteps.Add(step);
+        if (!RecordingRowShowing)
+            return;
+
+        var follow = IsScrolledToBottom(EventsList);
+        RemoveTaggedRows(PendingWaitRowTag);
+        RemoveTaggedRows(RecordingRowTag);
+        AddLiveStepRow(step);
+        AddPendingAndRecordingRows();
+        UpdateTimelineSummary();
+        UpdateEmptyStates();
+
+        // Keep the cursor in view, unless the user has scrolled up to look.
+        if (follow)
+            EventsList.ScrollIntoView(EventsList.Items[^1]);
+    }
+
+    /// <summary>A recorded step's row, built exactly as the committed
+    /// timeline builds it, but read-only until Stop commits it.</summary>
+    private void AddLiveStepRow(MacroEvent step) =>
+        EventsList.Items.Add(
+            new ListBoxItem
+            {
+                Content = BuildStepRow(EventsList.Items.Count + 1, step),
+                Tag = LiveStepRowTag,
+                Focusable = false,
+                IsHitTestVisible = false,
+            }
+        );
+
+    /// <summary>The wait still running (once there is an input for it to
+    /// follow), then the placeholder, both on the end of the list.</summary>
+    private void AddPendingAndRecordingRows()
+    {
+        pendingWaitText = null;
+        if (liveSteps.Count > 0)
+        {
+            pendingWaitText = new TextBlock
+            {
+                Text = PendingWaitText(hooks.SinceLastRecordedEvent),
+                VerticalAlignment = VerticalAlignment.Center,
+            };
+            Typography.SetNumeralAlignment(pendingWaitText, FontNumeralAlignment.Tabular);
+            // Overlay0, the faint ink: this wait is not a step until the next
+            // input lands, and the last one is dropped at Stop.
+            pendingWaitText.SetResourceReference(TextBlock.ForegroundProperty, "Overlay0");
+
+            var index = StepNumber(EventsList.Items.Count + 1);
+            index.SetResourceReference(TextBlock.ForegroundProperty, "Overlay0");
+            var verb = MutedText("wait");
+            verb.VerticalAlignment = VerticalAlignment.Center;
+
+            EventsList.Items.Add(
+                new ListBoxItem
+                {
+                    Content = StepRowGrid(index, verb, pendingWaitText),
+                    Tag = PendingWaitRowTag,
+                    Focusable = false,
+                    IsHitTestVisible = false,
+                }
+            );
+        }
 
         EventsList.Items.Add(
             new ListBoxItem
@@ -1947,18 +2073,65 @@ public partial class MainWindow : Window
                 IsHitTestVisible = false,
             }
         );
-        UpdateEmptyStates(); // a row is a row: "No steps yet" stands down
+    }
+
+    private void TickPendingWait()
+    {
+        if (pendingWaitText is not null)
+            pendingWaitText.Text = PendingWaitText(hooks.SinceLastRecordedEvent);
+    }
+
+    /// <summary>The running wait: milliseconds under a second, seconds to two
+    /// decimals from there, in invariant culture like the summary.</summary>
+    private static string PendingWaitText(TimeSpan elapsed)
+    {
+        var ms = Math.Max(1, (long)elapsed.TotalMilliseconds);
+        return ms < 1000
+            ? $"{ms} ms"
+            : $"{(ms / 1000.0).ToString("0.00", CultureInfo.InvariantCulture)} s";
+    }
+
+    /// <summary>Ends the live feed: no more step notifications, no more
+    /// ticking. Called at Stop and when the window closes.</summary>
+    private void StopLiveSteps()
+    {
+        pendingWaitTimer.Stop();
+        pendingWaitText = null;
+        if (liveStepHandler is not null)
+            hooks.StepRecorded -= liveStepHandler;
+        liveStepHandler = null;
+        recordingSession++; // anything still queued belongs to a dead session
+    }
+
+    /// <summary>True when the list shows its last row in full, or cannot
+    /// scroll at all: appending then keeps the end in view.</summary>
+    private static bool IsScrolledToBottom(ListBox list)
+    {
+        if (
+            VisualTreeHelper.GetChildrenCount(list) == 0
+            || VisualTreeHelper.GetChild(list, 0) is not Border { Child: ScrollViewer viewer }
+        )
+            return true;
+        return viewer.VerticalOffset >= viewer.ScrollableHeight - 1;
     }
 
     /// <summary>Takes the placeholder back out, wherever in the list it ended
     /// up.</summary>
     private void RemoveRecordingRow()
     {
-        for (var at = EventsList.Items.Count - 1; at >= 0; at--)
-            if (EventsList.Items[at] is ListBoxItem { Tag: RecordingRowTag })
-                EventsList.Items.RemoveAt(at);
+        RemoveTaggedRows(RecordingRowTag);
+        RemoveTaggedRows(PendingWaitRowTag);
+        RemoveTaggedRows(LiveStepRowTag);
+        pendingWaitText = null;
 
         UpdateEmptyStates();
+    }
+
+    private void RemoveTaggedRows(string tag)
+    {
+        for (var at = EventsList.Items.Count - 1; at >= 0; at--)
+            if (EventsList.Items[at] is ListBoxItem item && Equals(item.Tag, tag))
+                EventsList.Items.RemoveAt(at);
     }
 
     /// <summary>Both Record buttons wear one face: the row of tools' and the
@@ -2607,14 +2780,25 @@ public partial class MainWindow : Window
     private void UpdateTimelineSummary()
     {
         var i = Selected;
-        if (i < 0 || bindings[i].Macro.Events.Count == 0)
+        if (i < 0)
+        {
+            TimelineSummary.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // While recording into this macro, the steps captured so far count.
+        IReadOnlyList<MacroEvent> events =
+            RecordingRowShowing && liveSteps.Count > 0
+                ? [.. bindings[i].Macro.Events, .. liveSteps]
+                : bindings[i].Macro.Events;
+        if (events.Count == 0)
         {
             TimelineSummary.Visibility = Visibility.Collapsed;
             return;
         }
 
         TimelineSummary.Visibility = Visibility.Visible;
-        TimelineSummary.Text = TimelineSummaryText(bindings[i].Macro.Events);
+        TimelineSummary.Text = TimelineSummaryText(events);
     }
 
     /// <summary>How many steps, and how long their waits add up to:
@@ -3041,6 +3225,7 @@ public partial class MainWindow : Window
         tray?.Dispose();
         trayOffIcon.Dispose(); // the tray is gone, so the handles can go too
         trayOnIcon.Dispose();
+        StopLiveSteps();
         hooks.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));
         base.OnClosing(e);
     }

@@ -15,6 +15,19 @@ public sealed class MacroRecorder(TimeProvider? time = null)
 
     public bool IsRecording { get; private set; }
 
+    /// <summary>
+    /// Raised on the recording (hook) thread for every event appended, in
+    /// the order Stop returns them: the gap's DelayEvent first, then the
+    /// input event it precedes. Handlers must not block or touch UI objects.
+    /// </summary>
+    public event Action<MacroEvent>? StepRecorded;
+
+    /// <summary>
+    /// Time since the last recorded event, measured on the recorder's clock.
+    /// Safe to read from any thread; meaningless before the first event.
+    /// </summary>
+    public TimeSpan SinceLastEvent => time.GetElapsedTime(Volatile.Read(ref lastTimestamp));
+
     public void Start()
     {
         events.Clear();
@@ -53,10 +66,13 @@ public sealed class MacroRecorder(TimeProvider? time = null)
         if (events.Count > 0)
         {
             var gap = (int)time.GetElapsedTime(lastTimestamp, now).TotalMilliseconds;
-            events.Add(new DelayEvent(gap)); // DelayEvent clamps to >= 1 ms
+            var delay = new DelayEvent(gap); // DelayEvent clamps to >= 1 ms
+            events.Add(delay);
+            StepRecorded?.Invoke(delay);
         }
 
-        lastTimestamp = now;
+        Volatile.Write(ref lastTimestamp, now);
         events.Add(macroEvent);
+        StepRecorded?.Invoke(macroEvent);
     }
 }
