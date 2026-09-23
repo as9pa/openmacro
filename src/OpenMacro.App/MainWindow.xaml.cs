@@ -137,6 +137,7 @@ public partial class MainWindow : Window
         settings = SettingsStore.Load();
         (armHotkeyKey, armHotkeyModifiers) = ParseHotkey(settings);
         UpdateHotkeyButton();
+        SetupUpdates();
 
         // A confirmation's 3 s are up: fade it out, then bring the base line
         // back in its place. The base itself never fades away.
@@ -808,6 +809,14 @@ public partial class MainWindow : Window
             return;
 
         var menu = BuildBindingMenu(i);
+
+        // App-wide items, only under the dots (the row menu stays about the
+        // row), and above Delete's separator so Delete stays last and alone.
+        var at = menu.Items.Count - 1;
+        menu.Items.Insert(at, new Separator());
+        menu.Items.Insert(at, CheckOnLaunchItem());
+        menu.Items.Insert(at, CheckForUpdatesItem());
+
         menu.Placement = PlacementMode.Bottom;
         menu.PlacementTarget = MoreButton;
         MoreButton.ContextMenu = menu; // the menu's parent, for the theme's sake
@@ -2268,6 +2277,7 @@ public partial class MainWindow : Window
         var menu = new ContextMenu();
         menu.Items.Add(show);
         menu.Items.Add(trayArmItem);
+        menu.Items.Add(CheckForUpdatesItem());
         menu.Items.Add(new Separator());
         menu.Items.Add(exit);
 
@@ -2740,6 +2750,236 @@ public partial class MainWindow : Window
             LiveRule.SetResourceReference(Shape.FillProperty, rule);
     }
 
+    // ---- updates ----
+    // A notice at the right end of the bar, never a dialog. Checks run a few
+    // seconds after launch and every six hours after, while the setting is
+    // on; the download waits for the user's click.
+
+    private static readonly TimeSpan UpdateFirstCheckDelay = TimeSpan.FromSeconds(5);
+
+    private readonly UpdateService updates = new();
+
+    // First tick shortly after launch, then every six hours (see SetupUpdates).
+    private readonly System.Windows.Threading.DispatcherTimer updateTimer = new()
+    {
+        Interval = UpdateFirstCheckDelay,
+    };
+
+    // The newest release found that is newer than this build.
+    private ReleaseInfo? availableUpdate;
+
+    // Its exe, downloaded and verified, waiting for "Restart to update".
+    private string? downloadedUpdate;
+
+    private bool updateChecking;
+    private bool updateDownloading;
+
+    private void SetupUpdates()
+    {
+        updateTimer.Tick += (_, _) =>
+        {
+            updateTimer.Interval = TimeSpan.FromHours(6);
+            _ = CheckForUpdatesAsync(manual: false);
+        };
+        if (settings.CheckForUpdates)
+            updateTimer.Start();
+    }
+
+    /// <summary>Asks GitHub for the latest release and puts it in the notice
+    /// if it's newer. A <paramref name="manual"/> check that finds nothing
+    /// says so on the bar for 3 s; a failed check says nothing either way.</summary>
+    private async Task CheckForUpdatesAsync(bool manual)
+    {
+        if (updateChecking || updateDownloading)
+            return;
+
+        updateChecking = true;
+        try
+        {
+            var (outcome, release) = await updates.CheckAsync();
+            if (outcome == UpdateCheckOutcome.UpToDate && manual)
+                Status($"Up to date, {UpdateService.CurrentLabel}");
+            if (outcome != UpdateCheckOutcome.Available || release is null)
+                return;
+
+            // Already downloaded and waiting: the notice is right as it is.
+            if (downloadedUpdate is not null && availableUpdate?.Version == release.Version)
+                return;
+
+            if (downloadedUpdate is not null)
+            {
+                // Superseded by a newer release before it was installed.
+                try
+                {
+                    System.IO.File.Delete(downloadedUpdate);
+                }
+                catch
+                {
+                    // Left in the updates folder; harmless.
+                }
+                downloadedUpdate = null;
+            }
+
+            availableUpdate = release;
+            ShowUpdateAvailable(release);
+        }
+        finally
+        {
+            updateChecking = false;
+        }
+    }
+
+    /// <summary>"v0.3.0 available · Update", or "· Release page" for a build
+    /// that can't replace itself (the framework-dependent zip).</summary>
+    private void ShowUpdateAvailable(ReleaseInfo release)
+    {
+        if (UpdateService.CanSelfUpdate)
+            SetUpdateNotice(
+                $"{release.Label} available",
+                "Update",
+                () => _ = DownloadUpdateAsync(release)
+            );
+        else
+            SetUpdateNotice(
+                $"{release.Label} available",
+                "Release page",
+                () => UpdateService.OpenReleasePage(release)
+            );
+    }
+
+    private void ShowUpdateFailed(Action retry) =>
+        SetUpdateNotice("Update failed", "Retry", retry, failed: true);
+
+    /// <summary>Stamps the notice: <paramref name="text"/>, then " · " and a
+    /// link when there is one, and the progress bar when
+    /// <paramref name="percent"/> is set. Failed reads in Red.</summary>
+    private void SetUpdateNotice(
+        string text,
+        string? link = null,
+        Action? onLink = null,
+        bool failed = false,
+        int? percent = null
+    )
+    {
+        UpdateNotice.Visibility = Visibility.Visible;
+        UpdateProgress.Visibility = percent is null ? Visibility.Collapsed : Visibility.Visible;
+        UpdateProgressFill.Width = UpdateProgress.Width * Math.Clamp(percent ?? 0, 0, 100) / 100.0;
+
+        UpdateText.Text = text; // takes the old link down with the old text
+        UpdateText.SetResourceReference(TextBlock.ForegroundProperty, failed ? "Red" : "Subtext");
+        if (link is null || onLink is null)
+            return;
+
+        var hyperlink = new Hyperlink(new Run(link)) { Style = (Style)FindResource("StatusLink") };
+        AutomationProperties.SetAutomationId(hyperlink, "UpdateLink");
+        AutomationProperties.SetName(hyperlink, link);
+        if (failed)
+            hyperlink.SetResourceReference(TextElement.ForegroundProperty, "Red");
+        hyperlink.Click += (_, _) => onLink();
+        UpdateText.Inlines.Add(new Run(" · "));
+        UpdateText.Inlines.Add(hyperlink);
+    }
+
+    /// <summary>The Update click: downloads and verifies the release's exe,
+    /// with the notice showing progress, then offers the restart.</summary>
+    private async Task DownloadUpdateAsync(ReleaseInfo release)
+    {
+        if (updateDownloading)
+            return;
+
+        updateDownloading = true;
+        SetUpdateNotice($"Downloading {release.Label} · 0%", percent: 0);
+        var progress = new Progress<int>(p =>
+        {
+            if (updateDownloading)
+                SetUpdateNotice($"Downloading {release.Label} · {p}%", percent: p);
+        });
+
+        try
+        {
+            downloadedUpdate = await updates.DownloadAsync(release, progress);
+            updateDownloading = false;
+            SetUpdateNotice(
+                $"{release.Label} ready",
+                "Restart to update",
+                () => RestartToUpdate(release)
+            );
+        }
+        catch
+        {
+            updateDownloading = false;
+            downloadedUpdate = null;
+            ShowUpdateFailed(() => _ = DownloadUpdateAsync(release));
+        }
+    }
+
+    /// <summary>Swaps the downloaded exe in and restarts into it. Refused
+    /// while a macro plays or a recording runs: the restart would cut it off
+    /// mid-way.</summary>
+    private void RestartToUpdate(ReleaseInfo release)
+    {
+        if (hooks.IsRecording)
+        {
+            Status("Stop recording before updating");
+            return;
+        }
+        if (hooks.IsPlaying)
+        {
+            Status("Stop the macro before updating");
+            return;
+        }
+
+        if (downloadedUpdate is not { } path || !System.IO.File.Exists(path))
+        {
+            // The file went missing since it was verified: fetch it again.
+            downloadedUpdate = null;
+            _ = DownloadUpdateAsync(release);
+            return;
+        }
+
+        try
+        {
+            UpdateService.ApplyAndRestart(path);
+        }
+        catch
+        {
+            // ApplyAndRestart put the running exe back; the download may
+            // be gone, in which case the retry above fetches it again.
+            ShowUpdateFailed(() => RestartToUpdate(release));
+            return;
+        }
+
+        Application.Current.Shutdown(); // the new exe waits for this one to go
+    }
+
+    private MenuItem CheckForUpdatesItem() =>
+        MenuItemFor("Check for updates", () => _ = CheckForUpdatesAsync(manual: true));
+
+    private MenuItem CheckOnLaunchItem()
+    {
+        var item = new MenuItem
+        {
+            Header = "Check for updates on launch",
+            IsCheckable = true,
+            IsChecked = settings.CheckForUpdates,
+        };
+        item.Click += (_, _) => SetCheckForUpdates(item.IsChecked);
+        return item;
+    }
+
+    private void SetCheckForUpdates(bool on)
+    {
+        settings = settings with { CheckForUpdates = on };
+        SettingsStore.Save(settings);
+
+        updateTimer.Stop();
+        if (on)
+        {
+            updateTimer.Interval = UpdateFirstCheckDelay; // turning it on checks soon
+            updateTimer.Start();
+        }
+    }
+
     // ---- global Enable hotkey ----
     // RegisterHotKey, not the global hook — the plan's "prefer the narrowest
     // API" rule. The OS notifies us for exactly this one key, so it works
@@ -3001,6 +3241,8 @@ public partial class MainWindow : Window
         if (windowHandle != 0)
             UnregisterHotKey(windowHandle, ArmHotkeyId);
         tray?.Dispose();
+        updateTimer.Stop();
+        updates.Dispose();
         trayOffIcon.Dispose(); // the tray is gone, so the handles can go too
         trayOnIcon.Dispose();
         hooks.DisposeAsync().AsTask().Wait(TimeSpan.FromSeconds(3));

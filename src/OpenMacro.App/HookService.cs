@@ -48,6 +48,21 @@ public sealed class HookService : IAsyncDisposable
 
     public bool IsRecording => recorder.IsRecording;
 
+    // "Run now" playbacks in flight; they bypass the armed engine.
+    private int oneShotRuns;
+
+    /// <summary>True while a macro is playing, armed or "Run now".</summary>
+    public bool IsPlaying
+    {
+        get
+        {
+            if (Volatile.Read(ref oneShotRuns) > 0)
+                return true;
+            lock (gate)
+                return engine?.IsPlaying == true;
+        }
+    }
+
     /// <summary>
     /// Screen-pixel test for "is this point on our own window", set by the
     /// UI. Clicks there while recording are operating the recorder (e.g.
@@ -63,12 +78,14 @@ public sealed class HookService : IAsyncDisposable
     public async Task RunMacroOnceAsync(Macro macro)
     {
         var oneShot = new MacroEngine(sink, []);
+        Interlocked.Increment(ref oneShotRuns);
         try
         {
             await oneShot.RunOnceAsync(macro);
         }
         finally
         {
+            Interlocked.Decrement(ref oneShotRuns);
             await oneShot.DisposeAsync();
         }
     }

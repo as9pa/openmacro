@@ -47,6 +47,22 @@
                             <ContentControl x:Name="HotkeyChip" Style="{StaticResource KeyChip}"/>
                         </Button>
                     </StackPanel>
+                    <!-- Update notice: empty (collapsed) until a newer release
+                         turns up, then available / downloading / ready /
+                         failed. Stamped by the Show*Update* helpers; the left
+                         state text and dot never carry it. -->
+                    <StackPanel x:Name="UpdateNotice" DockPanel.Dock="Right" Orientation="Horizontal"
+                                Margin="0,0,14,0" VerticalAlignment="Center" Visibility="Collapsed">
+                        <Grid x:Name="UpdateProgress" Width="60" Height="3" Margin="0,1,8,0"
+                              VerticalAlignment="Center" Visibility="Collapsed">
+                            <Rectangle Fill="{DynamicResource Surface2}"/>
+                            <Rectangle x:Name="UpdateProgressFill" Width="0" HorizontalAlignment="Left"
+                                       Fill="{DynamicResource Subtext}"/>
+                        </Grid>
+                        <TextBlock x:Name="UpdateText" FontSize="12"
+                                   Foreground="{DynamicResource Subtext}"
+                                   VerticalAlignment="Center"/>
+                    </StackPanel>
                     <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
                         <Ellipse x:Name="StatusDot" Width="7" Height="7" Margin="2,1,8,0"
                                  VerticalAlignment="Center" Fill="{DynamicResource Overlay0}"/>

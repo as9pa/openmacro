@@ -48,6 +48,23 @@ public sealed class MacroEngine : IAsyncDisposable
     /// hook layer needs the mouse hook up to watch for them.</summary>
     public bool HasMouseTriggers => mouseBindings.Count > 0;
 
+    /// <summary>True while any armed binding is mid-playback.</summary>
+    public bool IsPlaying
+    {
+        get
+        {
+            foreach (var state in bindings.Values.Concat(mouseBindings.Values))
+            {
+                lock (state)
+                {
+                    if (state.IsRunning)
+                        return true;
+                }
+            }
+            return false;
+        }
+    }
+
     /// <summary>
     /// Called on the hook thread for every real (non-simulated) key-down.
     /// Must stay fast. Returns true if the key is an armed trigger — the
