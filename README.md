@@ -1,11 +1,36 @@
 # openmacro
 
-light macro software highly customizable with useful features
-has true 1ms delays
+Light, highly customizable macro software for Windows with true 1 ms delays.
 
-## 1ms delays
+**[Download](https://github.com/as9pa/openmacro/releases/latest)** (Windows x64)
 
-each delay waits until an absolute deadline instead of sleeping for a duration, so nothing drifts
+## What it does
+
+- **True 1 ms delays:** each step waits for an absolute deadline, so timing never drifts.
+- **Recording:** record your keystrokes into a macro, or add steps by hand on a timeline.
+- **Play modes:** run once, toggle on and off, play while held, or repeat a set number of times.
+- **Keybinds:** bind each macro to a key, plus a global enable hotkey that works from the tray.
+- **Per-app limit:** restrict a macro to one app, so the key types normally everywhere else.
+- **Light on the system:** runs on its own thread and allocates nothing per cycle.
+- **Saved for you:** macros are kept in `%APPDATA%\openmacro\bindings.json`.
+
+## Download
+
+Requires Windows x64.
+
+| [Releases](https://github.com/as9pa/openmacro/releases) | Size    | Needs .NET?                                                                       |
+| ------------------------------------------------------- | ------- | --------------------------------------------------------------------------------- |
+| `openmacro-v0.3.3-win-x64.exe`                          | ~72 MB  | No, the runtime is inside                                                         |
+| `openmacro-v0.3.3-win-x64-dotnet.zip`                   | ~510 KB | Yes, [.NET 10 Desktop Runtime](https://dotnet.microsoft.com/en-us/download)       |
+
+Take the `.exe` unless you already have .NET installed. Windows may warn on first run because the
+exe is unsigned: choose "More info", then "Run anyway".
+
+## How the 1 ms delays work
+
+Each delay waits until an absolute deadline instead of sleeping for a duration, so nothing drifts.
+The engine runs on its own thread and allocates nothing per cycle, so it stays quiet in the
+background and never stutters mid-game.
 
 ```csharp
 using var _ = TimerResolution.Request(1);        // timeBeginPeriod(1) while firing
@@ -20,38 +45,18 @@ foreach (var step in macro)
 }
 ```
 
-## performance
+## Build
 
-the engine runs on its own thread and allocates nothing per cycle, so it stays quiet in the background and never stutters mid-game
-
-# download
-
-requires windows x64.
-
-| [releases](https://github.com/as9pa/openmacro/releases) | size | needs .NET? |
-|---|---|---|
-| `openmacro-v0.3.3-win-x64.exe` | ~72 mb | **no** — built in runtime |
-| `openmacro-v0.3.3-win-x64-dotnet.zip` | ~510 kb | **yes** — [.NET 10 desktop runtime](https://dotnet.microsoft.com/en-us/download) |
-
-if you dont have dotnet download the `.exe`
-
-if you have dotnet download the `.zip`
-
-macros are stored in `%APPDATA%\openmacro\bindings.json`
-
-windows may warn on first run since the exe is unsigned — "more info" → "run anyway"
-
-# build
-
-needs the .NET 10 SDK.
+Needs the .NET 10 SDK.
 
     dotnet build OpenMacro.slnx
     dotnet test
     dotnet run --project src\OpenMacro.App
 
-release builds are made by `.github/workflows/release.yml` when a `v*` tag is pushed (the tag must match `<Version>` in the csproj).
-locally: `dotnet publish src\OpenMacro.App -c Release -p:PublishProfile=SingleFile` for the `.exe`
-and `-p:PublishProfile=FrameworkDependent` for the `-dotnet.zip`. each release also carries a `SHA256SUMS`.
+Release builds are made by `.github/workflows/release.yml` when a `v*` tag is pushed (the tag must
+match `<Version>` in the csproj). Locally: `dotnet publish src\OpenMacro.App -c Release -p:PublishProfile=SingleFile`
+for the `.exe` and `-p:PublishProfile=FrameworkDependent` for the `-dotnet.zip`. Each release also
+carries a `SHA256SUMS`.
 
 ## License
 
