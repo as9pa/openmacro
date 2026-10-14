@@ -1,5 +1,7 @@
 # openmacro
 
+![The openmacro window: macros on the left, the selected macro's keybind, mode, app and timeline on the right](docs/images/main.png)
+
 Light, highly customizable macro software for Windows with true 1 ms delays.
 
 **[Download](https://github.com/as9pa/openmacro/releases/latest)** (Windows x64)
