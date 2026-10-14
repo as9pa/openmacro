@@ -16,6 +16,8 @@ Light, highly customizable macro software for Windows with true 1 ms delays.
 - **Light on the system:** runs on its own thread and allocates nothing per cycle.
 - **Saved for you:** macros are kept in `%APPDATA%\openmacro\bindings.json`.
 
+![The Add menu on a macro's timeline: add input, delay, text, wait for keybind release, or mouse steps](docs/images/add-menu.png)
+
 ## Download
 
 Requires Windows x64.
